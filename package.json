@@ -21,6 +21,7 @@
     "format:fix": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
     "prepare": "husky",
+    "postinstall": "node scripts/vendor-better-sqlite3.mjs",
     "setup": "tsx setup/index.ts",
     "setup:auto": "tsx setup/auto.ts",
     "ncl": "tsx src/cli/client.ts",
