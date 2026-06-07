@@ -20,7 +20,7 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "format:fix": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
-    "prepare": "husky",
+    "prepare": "husky || true",
     "postinstall": "node scripts/vendor-better-sqlite3.mjs",
     "setup": "tsx setup/index.ts",
     "setup:auto": "tsx setup/auto.ts",
