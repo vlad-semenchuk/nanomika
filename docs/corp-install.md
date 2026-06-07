@@ -180,10 +180,18 @@ Webhook mode remains the fallback: omit `SLACK_APP_TOKEN` and instead set
 
 ## 7. Run
 
-One-time setup (interactive flow, no OneCLI step):
+Setup on corp uses the **step dispatcher** on plain `node` (no `tsx`). The build
+emits `dist/setup/` for the dispatcher path (`dist/setup/index.js` + each step);
+the interactive `setup:auto` channel-picker is intentionally NOT part of the
+trusted no-`tsx` output — on corp you wire credentials directly (§5–6) and invoke
+the steps you need:
 
 ```bash
-node dist/setup/index.js          # or step-by-step via --step <name>
+node dist/setup/index.js --step environment -- --check
+node dist/setup/index.js --step auth -- --check
+node dist/setup/index.js --step mounts -- --empty
+node dist/setup/index.js --step service
+# (run `node dist/setup/index.js` with no --step to list available steps)
 ```
 
 Start the host:

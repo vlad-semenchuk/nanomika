@@ -118,7 +118,7 @@ export async function run(args: string[]): Promise<void> {
   // Chat SDK adapters prefix, native adapters (WhatsApp/iMessage/Signal) don't.
   parsed.platformId = namespacedPlatformId(parsed.channel, parsed.platformId);
 
-  log.info('Registering channel', parsed);
+  log.info('Registering channel', { ...parsed });
 
   // Init v2 central DB
   fs.mkdirSync(path.join(projectRoot, 'data'), { recursive: true });
