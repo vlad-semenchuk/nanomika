@@ -1,30 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Register a Claude subscription OAuth token with OneCLI — the *only* auth
+# Register a Claude subscription OAuth token in .env — the *only* auth
 # path that needs a TTY break in the flow. Paste-based paths (existing
 # OAuth token / API key) are handled in-process by setup/auto.ts using
-# clack prompts, then onecli secrets create is invoked directly from TS.
+# clack prompts, which write the token to .env directly.
 #
 # Flow:
 #   1. Run `claude setup-token` under a PTY (via script(1)) so the browser
 #      OAuth dance works and its token is captured into a tempfile.
 #   2. Regex the sk-ant-oat…AA token out of the ANSI-stripped capture.
-#   3. Register it with OneCLI.
-#
-# Env overrides:
-#   SECRET_NAME   OneCLI secret name   (default: Anthropic)
-#   HOST_PATTERN  OneCLI host pattern  (default: api.anthropic.com)
+#   3. Write it to .env as CLAUDE_CODE_OAUTH_TOKEN (the credential proxy in
+#      src/credential-proxy.ts reads it from there).
 
 # Prefer bash 4+ (for `read -e -i` readline preload). macOS ships 3.2 in
 # /bin/bash, but Homebrew users usually have 5.x first on PATH. The
 # readline preload is optional — on 3.x we fall back to a plain prompt.
-
-SECRET_NAME="${SECRET_NAME:-Anthropic}"
-HOST_PATTERN="${HOST_PATTERN:-api.anthropic.com}"
-
-command -v onecli >/dev/null \
-  || { echo "onecli not found. Install it first (see /setup §4)." >&2; exit 1; }
 
 if ! command -v claude >/dev/null 2>&1; then
   echo "Claude Code CLI not found — installing it now (needed for subscription sign-in)…"
@@ -65,7 +56,7 @@ fi
 if [ "$is_headless" = "1" ]; then
   cat <<'EOF'
 A sign-in link will appear for you to sign in with your Claude account.
-When you finish, we'll save the token to your OneCLI vault automatically.
+When you finish, we'll save the token to your .env automatically.
 
 Press Enter to continue, or edit the command first.
 
@@ -73,7 +64,7 @@ EOF
 else
   cat <<'EOF'
 A browser window will open for you to sign in with your Claude account.
-When you finish, we'll save the token to your OneCLI vault automatically.
+When you finish, we'll save the token to your .env automatically.
 
 Press Enter to continue, or edit the command first.
 
@@ -116,12 +107,18 @@ fi
 
 echo
 echo "Got token: ${token:0:16}…${token: -4}"
-echo "Saving it to your OneCLI vault as '${SECRET_NAME}' (host: ${HOST_PATTERN})…"
+echo "Saving it to .env as CLAUDE_CODE_OAUTH_TOKEN…"
 
-onecli secrets create \
-  --name "$SECRET_NAME" \
-  --type anthropic \
-  --value "$token" \
-  --host-pattern "$HOST_PATTERN"
+# Upsert CLAUDE_CODE_OAUTH_TOKEN into ./.env (cwd is the project root — auto.ts
+# spawns this script from there). OAuth tokens are [A-Za-z0-9_-] only, so `|` is
+# a safe sed delimiter.
+env_file=".env"
+if [ -f "$env_file" ] && grep -qE '^CLAUDE_CODE_OAUTH_TOKEN=' "$env_file"; then
+  tmp_env=$(mktemp -t nanomika-env.XXXXXX)
+  sed "s|^CLAUDE_CODE_OAUTH_TOKEN=.*|CLAUDE_CODE_OAUTH_TOKEN=${token}|" "$env_file" > "$tmp_env" \
+    && mv "$tmp_env" "$env_file"
+else
+  printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$token" >> "$env_file"
+fi
 
 echo "Done."

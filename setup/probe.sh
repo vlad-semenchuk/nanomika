@@ -101,43 +101,12 @@ probe_docker() {
   fi
 }
 
-probe_onecli_url() {
-  local url
-  url=$(read_env_var ONECLI_URL)
-  if [[ -n "$url" ]]; then
-    printf '%s' "$url"
-    return
-  fi
-  command_exists onecli || return 0
-  local out
-  out=$(with_timeout onecli config get api-host 2>/dev/null) || return 0
-  # Minimal JSON extract: {"value":"http..."} — avoid hard dep on jq
-  if [[ "$out" =~ \"value\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
-    printf '%s' "${BASH_REMATCH[1]}"
-  fi
-}
-
-probe_onecli_status() {
-  local url="$1"
-  if ! command_exists onecli && [[ ! -x "$LOCAL_BIN/onecli" ]]; then
-    echo "not_found"; return
-  fi
-  if [[ -z "$url" ]]; then
-    echo "installed_not_healthy"; return
-  fi
-  if command_exists curl \
-     && curl -fsS --max-time 2 "${url}/api/health" >/dev/null 2>&1; then
-    echo "healthy"
-  else
-    echo "installed_not_healthy"
-  fi
-}
-
 probe_anthropic_secret() {
-  command_exists onecli || { echo "false"; return; }
-  local out
-  out=$(with_timeout onecli secrets list 2>/dev/null) || { echo "false"; return; }
-  if echo "$out" | grep -Eq '"type"[[:space:]]*:[[:space:]]*"anthropic"'; then
+  # The credential proxy (src/credential-proxy.ts) reads the Anthropic
+  # credential from .env. Report whether any of its three keys is present.
+  local env_file=".env"
+  [[ -f "$env_file" ]] || { echo "false"; return; }
+  if grep -Eq '^(ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_AUTH_TOKEN)=.+' "$env_file"; then
     echo "true"
   else
     echo "false"
@@ -223,13 +192,7 @@ OS=$(probe_os)
 SHELL_NAME="${SHELL:-unknown}"
 HOST_DEPS=$(probe_host_deps)
 probe_docker
-ONECLI_URL_VAL=$(probe_onecli_url)
-ONECLI_STATUS=$(probe_onecli_status "$ONECLI_URL_VAL")
-if [[ "$ONECLI_STATUS" == "not_found" ]]; then
-  ANTHROPIC_SECRET="false"
-else
-  ANTHROPIC_SECRET=$(probe_anthropic_secret)
-fi
+ANTHROPIC_SECRET=$(probe_anthropic_secret)
 SERVICE_STATUS=$(probe_service_status "$OS")
 DISPLAY_NAME=$(probe_display_name "$OS")
 
@@ -243,8 +206,6 @@ SHELL: ${SHELL_NAME}
 HOST_DEPS: ${HOST_DEPS}
 DOCKER: ${DOCKER_STATUS}
 IMAGE_PRESENT: ${IMAGE_PRESENT}
-ONECLI_STATUS: ${ONECLI_STATUS}
-ONECLI_URL: ${ONECLI_URL_VAL:-none}
 ANTHROPIC_SECRET: ${ANTHROPIC_SECRET}
 SERVICE_STATUS: ${SERVICE_STATUS}
 INFERRED_DISPLAY_NAME: ${DISPLAY_NAME}
