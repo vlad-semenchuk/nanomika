@@ -6,13 +6,16 @@
  */
 import path from 'path';
 
+import type { Server } from 'http';
+
 import { backfillContainerConfigs } from './backfill-container-configs.js';
-import { DATA_DIR } from './config.js';
+import { CREDENTIAL_PROXY_PORT, DATA_DIR } from './config.js';
 import { enforceStartupBackoff, resetCircuitBreaker } from './circuit-breaker.js';
 import { migrateGroupsToClaudeLocal } from './claude-md-compose.js';
+import { startCredentialProxy } from './credential-proxy.js';
 import { initDb } from './db/connection.js';
 import { runMigrations } from './db/migrations/index.js';
-import { ensureContainerRuntimeRunning, cleanupOrphans } from './container-runtime.js';
+import { ensureContainerRuntimeRunning, cleanupOrphans, PROXY_BIND_HOST } from './container-runtime.js';
 import { startActiveDeliveryPoll, startSweepDeliveryPoll, setDeliveryAdapter, stopDeliveryPolls } from './delivery.js';
 import { startHostSweep, stopHostSweep } from './host-sweep.js';
 import { routeInbound } from './router.js';
@@ -63,6 +66,8 @@ import { startCliServer, stopCliServer } from './cli/socket-server.js';
 import type { ChannelAdapter, ChannelSetup } from './channels/adapter.js';
 import { initChannelAdapters, teardownChannelAdapters, getChannelAdapter } from './channels/channel-registry.js';
 
+let credentialProxyServer: Server | undefined;
+
 async function main(): Promise<void> {
   log.info('NanoMika starting');
 
@@ -85,6 +90,12 @@ async function main(): Promise<void> {
   // 2. Container runtime
   ensureContainerRuntimeRunning();
   cleanupOrphans();
+
+  // 2b. Credential proxy — containers route Anthropic API calls through this
+  // host-side proxy, which injects the real key/token. Must be up before any
+  // container spawns.
+  credentialProxyServer = await startCredentialProxy(CREDENTIAL_PROXY_PORT, PROXY_BIND_HOST);
+  log.info('Credential proxy started', { port: CREDENTIAL_PROXY_PORT, host: PROXY_BIND_HOST });
 
   // 3. Channel adapters
   await initChannelAdapters((adapter: ChannelAdapter): ChannelSetup => {
@@ -192,6 +203,7 @@ async function shutdown(signal: string): Promise<void> {
   }
   stopDeliveryPolls();
   stopHostSweep();
+  credentialProxyServer?.close();
   await stopCliServer();
   try {
     await teardownChannelAdapters();
