@@ -13,7 +13,7 @@
  *                          channel flow). The CLI scratch agent is always
  *                          "Terminal Agent".
  *   NANOMIKA_SKIP          comma-separated step names to skip
- *                          (environment|container|onecli|auth|mounts|
+ *                          (environment|container|auth|mounts|
  *                           service|cli-agent|timezone|channel|
  *                           verify|first-chat)
  *
@@ -49,7 +49,6 @@ import {
 import { runAdvancedScreen } from './lib/setup-config-screen.js';
 import { runWindowedStep } from './lib/windowed-runner.js';
 import { detectRegisteredGroups, detectExistingDisplayName } from './environment.js';
-import { pollHealth } from './onecli.js';
 import { getLaunchdLabel, getSystemdUnit } from '../src/install-slug.js';
 import { claudeCliAvailable, resolveTimezoneViaClaude } from './lib/tz-from-claude.js';
 import * as setupLog from './logs.js';
@@ -65,10 +64,10 @@ type ChannelChoice = 'telegram' | 'discord' | 'whatsapp' | 'signal' | 'teams' | 
 
 async function main(): Promise<void> {
   // Make sure ~/.local/bin is on PATH for every child process we spawn.
-  // Installers we run mid-setup (OneCLI, claude) drop binaries there and
-  // append a PATH line to the user's shell rc, but rc updates don't reach
-  // an already-running Node process — so without this patch a freshly
-  // installed `onecli` is invisible to a subsequent `runInheritScript`.
+  // The claude installer we run mid-setup drops its binary there and appends
+  // a PATH line to the user's shell rc, but rc updates don't reach an
+  // already-running Node process — so without this patch a freshly installed
+  // `claude` is invisible to a subsequent `runInheritScript`.
   ensureLocalBinOnPath();
 
   // Parse CLI flags first — `--help` short-circuits before we render anything,
@@ -173,108 +172,6 @@ async function main(): Promise<void> {
       );
     }
     maybeReexecUnderSg();
-  }
-
-  if (!skip.has('onecli')) {
-    p.log.message(
-      brandBody(
-        dimWrap(
-          'Your assistant never gets your API keys directly. The vault adds them to approved requests as they leave the sandbox.',
-          4,
-        ),
-      ),
-    );
-
-    const remoteHost = process.env.NANOMIKA_ONECLI_API_HOST?.trim();
-
-    if (remoteHost) {
-      // Advanced-settings override: user has already named a remote vault,
-      // so skip the local-vs-fresh prompt entirely. Health-check it here
-      // rather than letting the step fail silently — a typo in the URL is a
-      // common mistake and the answer is human-fixable.
-      const s = p.spinner();
-      s.start(`Checking remote OneCLI at ${remoteHost}…`);
-      const healthy = await pollHealth(remoteHost, 5000);
-      if (!healthy) {
-        s.stop(`Couldn't reach OneCLI at ${remoteHost}.`, 1);
-        await fail(
-          'onecli',
-          `Couldn't reach OneCLI at ${remoteHost}.`,
-          'Check the URL and that OneCLI is running on the remote machine, then retry.',
-        );
-      }
-      s.stop('Remote OneCLI is reachable.');
-
-      const res = await runQuietStep(
-        'onecli',
-        {
-          running: `Connecting to remote OneCLI at ${remoteHost}…`,
-          done: 'OneCLI vault ready.',
-        },
-        ['--remote-url', remoteHost],
-      );
-      if (!res.ok) {
-        const err = res.terminal?.fields.ERROR;
-        await fail(
-          'onecli',
-          `Couldn't connect to remote OneCLI (${err ?? 'unknown error'}).`,
-          'Check the URL and that OneCLI is running on the remote machine, then retry.',
-        );
-      }
-    } else {
-      // Respect an existing OneCLI install. Re-running the installer would
-      // rebind the listener and knock any other app using that gateway
-      // offline — confirm with the user before doing that.
-      const existing = detectExistingOnecli();
-      let reuse = false;
-      if (existing) {
-        const choice = ensureAnswer(
-          await brightSelect({
-            message: `Found an existing OneCLI at ${existing.apiHost}. What would you like to do?`,
-            options: [
-              {
-                value: 'reuse',
-                label: 'Use the existing instance',
-                hint: 'recommended — keeps other apps bound to this vault working',
-              },
-              {
-                value: 'fresh',
-                label: 'Install a fresh instance for NanoMika',
-                hint: 'reinstalls onecli; other apps may need to reconnect',
-              },
-            ],
-          }),
-        ) as 'reuse' | 'fresh';
-        setupLog.userInput('onecli_choice', choice);
-        reuse = choice === 'reuse';
-      }
-
-      const res = await runQuietStep(
-        'onecli',
-        {
-          running: reuse
-            ? 'Hooking up to your existing OneCLI…'
-            : "Setting up OneCLI, your agent's vault…",
-          done: 'OneCLI vault ready.',
-        },
-        reuse ? ['--reuse'] : [],
-      );
-      if (!res.ok) {
-        const err = res.terminal?.fields.ERROR;
-        if (err === 'onecli_not_on_path_after_install') {
-          await fail(
-            'onecli',
-            'OneCLI was installed but your shell needs to refresh to see it.',
-            'Open a new shell or run `export PATH="$HOME/.local/bin:$PATH"`, then retry.',
-          );
-        }
-        await fail(
-          'onecli',
-          `Couldn't set up OneCLI (${err ?? 'unknown error'}).`,
-          'Make sure curl is installed and ~/.local/bin is writable, then retry.',
-        );
-      }
-    }
   }
 
   if (!skip.has('auth')) {
@@ -712,8 +609,8 @@ async function runAuthStep(): Promise<void> {
   }
 
   // Custom Anthropic-compatible endpoint flow. Both URL and token must be set;
-  // OneCLI stores the token as a generic Bearer secret keyed to the URL host,
-  // so the container only ever sees ANTHROPIC_BASE_URL + a placeholder.
+  // the token is written to .env as ANTHROPIC_AUTH_TOKEN and the credential
+  // proxy injects it on the wire, so the container only sees ANTHROPIC_BASE_URL.
   const customBaseUrl = process.env.NANOMIKA_ANTHROPIC_BASE_URL?.trim();
   const customAuthToken = process.env.NANOMIKA_ANTHROPIC_AUTH_TOKEN?.trim();
   if (customBaseUrl && customAuthToken) {
@@ -831,51 +728,31 @@ async function runPasteAuth(method: 'oauth' | 'api'): Promise<void> {
   );
   const token = (answer as string).replace(/\s+/g, '');
 
-  const res = await runQuietChild(
-    'auth',
-    'onecli',
-    [
-      'secrets',
-      'create',
-      '--name',
-      'Anthropic',
-      '--type',
-      'anthropic',
-      '--value',
-      token,
-      '--host-pattern',
-      'api.anthropic.com',
-    ],
-    {
-      running: `Saving your ${label} to your OneCLI vault…`,
-      done: 'Claude account connected.',
-    },
-    {
-      extraFields: { METHOD: method },
-    },
-  );
-  if (!res.ok) {
+  const envKey = method === 'oauth' ? 'CLAUDE_CODE_OAUTH_TOKEN' : 'ANTHROPIC_API_KEY';
+  try {
+    writeEnvLine(envKey, token);
+  } catch {
     await fail(
       'auth',
-      `Couldn't save your ${label} to the vault.`,
-      'Make sure OneCLI is running (`onecli version`), then retry.',
+      `Couldn't save your ${label} to .env.`,
+      'Check that the project directory is writable, then retry.',
     );
   }
+  setupLog.step('auth', 'interactive', 0, { METHOD: method });
+  p.log.success(brandBody('Claude account connected.'));
 }
 
 /**
- * Set up Anthropic auth for a custom endpoint. The token is stored as a
- * OneCLI generic secret with header injection so the proxy rewrites the
- * Authorization header on the wire — the container only ever sees
- * ANTHROPIC_BASE_URL + a placeholder bearer.
+ * Set up Anthropic auth for a custom endpoint. The token is written to .env
+ * as ANTHROPIC_AUTH_TOKEN; the credential proxy injects it on the wire, so the
+ * container only ever sees ANTHROPIC_BASE_URL.
  */
 async function runCustomEndpointAuth(
   baseUrl: string,
   token: string,
 ): Promise<void> {
-  let host: string;
   try {
-    host = new URL(baseUrl).hostname;
+    new URL(baseUrl);
   } catch {
     await fail(
       'auth',
@@ -885,42 +762,18 @@ async function runCustomEndpointAuth(
     return;
   }
 
-  const res = await runQuietChild(
-    'auth',
-    'onecli',
-    [
-      'secrets',
-      'create',
-      '--name',
-      'Anthropic',
-      '--type',
-      'generic',
-      '--value',
-      token,
-      '--host-pattern',
-      host,
-      '--header-name',
-      'Authorization',
-      '--value-format',
-      'Bearer {value}',
-    ],
-    {
-      running: `Saving your Anthropic auth token to your OneCLI vault…`,
-      done: 'Claude account connected.',
-    },
-    { extraFields: { METHOD: 'custom-endpoint', HOST: host } },
-  );
-  if (!res.ok) {
+  try {
+    writeEnvLine('ANTHROPIC_AUTH_TOKEN', token);
+  } catch {
     await fail(
       'auth',
-      `Couldn't save your Anthropic auth token to the vault.`,
-      'Make sure OneCLI is running (`onecli version`), then retry.',
+      `Couldn't save your Anthropic auth token to .env.`,
+      'Check that the project directory is writable, then retry.',
     );
   }
 
   // ANTHROPIC_BASE_URL has to be in .env so the runtime provider config
-  // reads it when building container env. The token is *not* written —
-  // OneCLI holds it.
+  // reads it when building container env.
   writeEnvLine('ANTHROPIC_BASE_URL', baseUrl);
 
   // Register the claude provider so the runtime passes ANTHROPIC_BASE_URL
@@ -1172,56 +1025,10 @@ function ensureLocalBinOnPath(): void {
 }
 
 function anthropicSecretExists(): boolean {
-  try {
-    const res = spawnSync('onecli', ['secrets', 'list'], {
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    if (res.status !== 0) return false;
-    return /anthropic/i.test(res.stdout ?? '');
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Probe the host for a working OneCLI install so we can offer to reuse it
- * instead of re-running the installer (which rebinds the listener and breaks
- * any other app already using that gateway).
- */
-function detectExistingOnecli(): { version: string; apiHost: string } | null {
-  try {
-    const ver = spawnSync('onecli', ['version'], {
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    if (ver.status !== 0) return null;
-    const version = (ver.stdout ?? '').trim();
-    if (!version) return null;
-
-    const host = spawnSync('onecli', ['config', 'get', 'api-host'], {
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    if (host.status !== 0) return null;
-    const raw = (host.stdout ?? '').trim();
-    if (!raw) return null;
-
-    // onecli 1.3+ emits JSON by default. Older versions would print raw text.
-    try {
-      const parsed = JSON.parse(raw) as { data?: unknown; value?: unknown };
-      const val = parsed.data ?? parsed.value;
-      if (typeof val === 'string' && val.trim()) {
-        return { version, apiHost: val.trim() };
-      }
-    } catch {
-      // not JSON — try to extract a URL directly
-    }
-    const m = raw.match(/https?:\/\/[\w.\-]+(?::\d+)?/);
-    return m ? { version, apiHost: m[0] } : null;
-  } catch {
-    return null;
-  }
+  const envFile = path.join(process.cwd(), '.env');
+  if (!fs.existsSync(envFile)) return false;
+  const content = fs.readFileSync(envFile, 'utf-8');
+  return /^(ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_AUTH_TOKEN)=.+$/m.test(content);
 }
 
 function runInheritScript(cmd: string, args: string[]): Promise<number> {
@@ -1234,7 +1041,7 @@ function runInheritScript(cmd: string, args: string[]): Promise<number> {
 /**
  * After installing Docker, this process's supplementary groups are still
  * frozen from login — subsequent steps that talk to /var/run/docker.sock
- * (onecli install, service start, …) fail with EACCES even though the
+ * (service start, …) fail with EACCES even though the
  * daemon is up. Detect that and re-exec the whole driver under `sg docker`
  * so the rest of the run inherits the docker group without a re-login.
  */
