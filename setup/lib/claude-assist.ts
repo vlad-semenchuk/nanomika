@@ -51,7 +51,6 @@ export const STEP_FILES: Record<string, string[]> = {
     'setup/install-docker.sh',
     'container/Dockerfile',
   ],
-  onecli: ['setup/onecli.ts'],
   auth: [
     'setup/auth.ts',
     'setup/register-claude-token.sh',

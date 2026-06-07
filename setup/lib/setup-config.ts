@@ -64,28 +64,6 @@ const httpUrl = (v: string): string | undefined =>
 
 export const CONFIG: Entry[] = [
   {
-    key: 'onecliApiHost',
-    label: 'OneCLI vault URL',
-    help: 'Use a remote OneCLI vault instead of installing one locally.',
-    surface: 'flag+ui',
-    group: 'OneCLI',
-    type: 'url',
-    default: 'https://api.onecli.sh',
-    placeholder: 'https://api.onecli.sh',
-    validate: httpUrl,
-  },
-  {
-    key: 'onecliApiToken',
-    label: 'OneCLI access token',
-    help: 'Bearer token for the remote vault. Required if --onecli-api-host is set.',
-    surface: 'flag+ui',
-    group: 'OneCLI',
-    type: 'string',
-    secret: true,
-    placeholder: 'oc_…',
-    validate: (v) => (v.startsWith('oc_') ? undefined : 'Must start with oc_'),
-  },
-  {
     key: 'anthropicBaseUrl',
     label: 'Anthropic API base URL',
     help: 'Use a proxy or alternative endpoint instead of api.anthropic.com.',
