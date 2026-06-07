@@ -1,98 +1,46 @@
 ---
 name: add-gmail-tool
-description: Add Gmail as an MCP tool (read, search, send, label, draft) using OneCLI-managed OAuth. The agent gets Gmail tools in every enabled group; OneCLI injects real tokens at request time so no raw credentials are ever in the container or on disk in usable form.
+description: Add Gmail as an MCP tool (read, search, send, label, draft) using native Google OAuth (Desktop client). Real tokens live in a mounted dir on the host, never in chat or the image; the container calls gmail.googleapis.com directly with the real token.
 ---
 
-# Add Gmail Tool (OneCLI-native)
+# Add Gmail Tool (native Google OAuth)
 
-This skill wires the [`@gongrzhe/server-gmail-autoauth-mcp`](https://www.npmjs.com/package/@gongrzhe/server-gmail-autoauth-mcp) stdio MCP server into selected agent groups. The MCP server reads stub credentials containing the `onecli-managed` placeholder; the OneCLI gateway intercepts outbound calls to `gmail.googleapis.com` and injects the real OAuth bearer from its vault.
+This skill wires the [`@gongrzhe/server-gmail-autoauth-mcp`](https://www.npmjs.com/package/@gongrzhe/server-gmail-autoauth-mcp) stdio MCP server into selected agent groups. The MCP server reads **real** OAuth credentials from a host directory mounted into the container (`~/.gmail-mcp/`) and calls `gmail.googleapis.com` directly with the real bearer token.
 
 Tools exposed (from `gmail-mcp@1.1.11`, surfaced to the agent as `mcp__gmail__<name>`): `search_emails`, `read_email`, `send_email`, `draft_email`, `delete_email`, `modify_email`, `batch_modify_emails`, `batch_delete_emails`, `download_attachment`, `list_email_labels`, `create_label`, `update_label`, `delete_label`, `get_or_create_label`, `list_filters`, `get_filter`, `create_filter`, `create_filter_from_template`, `delete_filter`.
 
-**Why this pattern:** v2's invariant is that containers never receive raw API keys — OneCLI is the sole credential path (see CHANGELOG v2.0.0). The stub-file pattern satisfies this: the container sees `"onecli-managed"` placeholders, the gateway swaps them in flight.
+**Why this pattern:** the credentials never reach chat or the container image. They live in a host-side directory that is mounted into the container read/write at spawn time, so the OAuth keys and refresh token stay on the host filesystem and are only visible to the agent group(s) you explicitly wire.
 
-## Phase 1: Pre-flight
+## Phase 1: Pre-flight — one-time Google OAuth setup
 
-### Verify OneCLI has Gmail connected
+1. In Google Cloud Console, create (or reuse) a project and enable the **Gmail API**.
+2. Configure the OAuth consent screen (Internal if a Workspace org; otherwise External + add yourself as a test user).
+3. Create an **OAuth client ID** of type **Desktop app**. Download the JSON.
+4. Place it as the real OAuth keys file:
 
-```bash
-onecli apps get --provider gmail
-```
+       mkdir -p ~/.gmail-mcp
+       cp ~/Downloads/client_secret_*.json ~/.gmail-mcp/gcp-oauth.keys.json
+       chmod 600 ~/.gmail-mcp/gcp-oauth.keys.json
 
-Expected: `"connection": { "status": "connected" }` with scopes including `gmail.readonly`, `gmail.modify`, `gmail.send`.
+5. Mint a real refresh token by running the MCP server's auth flow once (browser sign-in):
 
-If not connected, tell the user:
+       npx @gongrzhe/server-gmail-autoauth-mcp@1.1.11 auth
 
-> Open the OneCLI web UI at http://127.0.0.1:10254, go to Apps → Gmail, and click Connect. Sign in with the Google account you want the agent to act as.
+   This writes a real `~/.gmail-mcp/credentials.json`. Confirm it holds a real
+   refresh token (Google installed-app refresh tokens start with `1//`), not a
+   placeholder:
 
-### Verify stub credentials exist
+       grep -q '"refresh_token": *"1//' ~/.gmail-mcp/credentials.json && echo "real token present"
 
-```bash
-ls -la ~/.gmail-mcp/gcp-oauth.keys.json ~/.gmail-mcp/credentials.json 2>&1
-```
-
-If both exist and contain `"onecli-managed"`:
-
-```bash
-grep -l onecli-managed ~/.gmail-mcp/gcp-oauth.keys.json ~/.gmail-mcp/credentials.json
-```
-
-...skip to Phase 2.
-
-If either file exists but does **not** contain `onecli-managed`, **STOP** and tell the user — these are real OAuth credentials from a previous non-OneCLI install. Back them up, then delete before proceeding. The OneCLI migration normally handles this; if it didn't, something is wrong.
-
-If both files are absent, write them now:
-
-```bash
-mkdir -p ~/.gmail-mcp
-cat > ~/.gmail-mcp/gcp-oauth.keys.json <<'EOF'
-{
-  "installed": {
-    "client_id": "onecli-managed.apps.googleusercontent.com",
-    "client_secret": "onecli-managed",
-    "redirect_uris": ["http://localhost:3000/oauth2callback"]
-  }
-}
-EOF
-cat > ~/.gmail-mcp/credentials.json <<'EOF'
-{
-  "access_token": "onecli-managed",
-  "refresh_token": "onecli-managed",
-  "token_type": "Bearer",
-  "expiry_date": 99999999999999,
-  "scope": "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send"
-}
-EOF
-chmod 600 ~/.gmail-mcp/gcp-oauth.keys.json ~/.gmail-mcp/credentials.json
-```
-
-### Verify mount allowlist covers the path
-
-```bash
-cat ~/.config/nanomika/mount-allowlist.json
-```
-
-`~/.gmail-mcp` must sit under an `allowedRoots` entry (e.g. `/home/<user>`). If it doesn't, tell the user to run `/manage-mounts` first or add their home directory.
-
-### Check agent secret-mode
-
-For each target agent group, confirm OneCLI will inject Gmail secrets into its container. Find the OneCLI agent ID that matches the group's `agentGroupId`:
-
-```bash
-onecli agents list
-```
-
-If that agent's `secretMode` is `all`, you're done — Gmail secrets (identified by OneCLI's Gmail hostPattern) will auto-inject. If it's `selective`, explicitly assign the Gmail secrets using the safe merge pattern (`set-secrets` replaces the entire list — always read first):
-
-```bash
-GMAIL_IDS=$(onecli secrets list | jq -r '[.data[] | select(.name | test("(?i)gmail")) | .id] | join(",")')
-CURRENT=$(onecli agents secrets --id <agent-id> | jq -r '[.data[]] | join(",")')
-MERGED=$(printf '%s' "$CURRENT,$GMAIL_IDS" | tr ',' '\n' | sort -u | paste -sd ',' -)
-onecli agents set-secrets --id <agent-id> --secret-ids "$MERGED"
-onecli agents secrets --id <agent-id>
-```
+6. Ensure `~/.gmail-mcp` is covered by the mount allowlist (`~/.config/nanomika/mount-allowlist.json`);
+   run `/manage-mounts` if not.
 
 ## Phase 2: Apply Code Changes
+
+> **On the corp trusted-install image, gmail-mcp is already baked into the image**
+> (see `container/Dockerfile`, pinned via `GMAIL_MCP_VERSION`). If `gmail-mcp` is
+> already on `PATH` in the image, skip straight to Phase 3 — there is no Dockerfile
+> edit to make. The steps below are for installs whose image does not yet ship it.
 
 ### Check if already applied
 
@@ -108,7 +56,6 @@ Edit `container/Dockerfile`. Find the pinned-version ARG block:
 ```dockerfile
 ARG CLAUDE_CODE_VERSION=2.1.116
 ARG AGENT_BROWSER_VERSION=latest
-ARG VERCEL_VERSION=latest
 ARG BUN_VERSION=1.3.12
 ```
 
@@ -210,7 +157,7 @@ Tell the user:
 
 > In your `<agent-name>` chat, send: **"list my gmail labels"** or **"search my inbox for invoices from last month"**.
 >
-> The agent should use `mcp__gmail__list_labels` / `mcp__gmail__search`. The first call may take a second or two while the MCP server starts and OneCLI does the token exchange.
+> The agent should use `mcp__gmail__list_labels` / `mcp__gmail__search`. The first call may take a second or two while the MCP server starts and Google validates the token.
 
 ### Check logs if the tool isn't working
 
@@ -223,7 +170,7 @@ ls data/v2-sessions/*/stderr.log | head
 Common signals:
 - `command not found: gmail-mcp` → image wasn't rebuilt or PATH doesn't include `/pnpm` (should — `ENV PATH="$PNPM_HOME:$PATH"` in Dockerfile).
 - `ENOENT: no such file or directory, open '/workspace/extra/.gmail-mcp/credentials.json'` → mount is missing. Check `~/.config/nanomika/mount-allowlist.json` includes a parent of `~/.gmail-mcp`.
-- `401 Unauthorized` from `gmail.googleapis.com` → OneCLI isn't injecting. Check the agent's secret mode (`onecli agents secrets --id <agent-id>`) and that the Gmail app is connected (`onecli apps get --provider gmail`).
+- `401 Unauthorized` from `gmail.googleapis.com` → the mounted `credentials.json` is a stub or its refresh token expired/was revoked; re-run the auth flow in Phase 1 step 5.
 - Agent says "I don't have Gmail tools" → the `gmail` MCP server isn't registered in this group's `mcpServers` (re-run the `ncl groups config add-mcp-server` step in Phase 3 for that group and restart it), or the agent-runner image is stale (rebuild with `./container/build.sh`, with `--no-cache` if suspicious).
 
 ## Removal
@@ -242,21 +189,16 @@ Common signals:
    ```
 3. Remove the `GMAIL_MCP_VERSION` ARG and the `pnpm install -g @gongrzhe/server-gmail-autoauth-mcp` block from `container/Dockerfile`.
 4. `pnpm run build && ./container/build.sh && systemctl --user restart "$(. setup/lib/install-slug.sh && systemd_unit)"`.
-5. (Optional) `rm -rf ~/.gmail-mcp/` if no other host-side tool needs the stubs.
-6. (Optional) Disconnect Gmail in OneCLI: `onecli apps disconnect --provider gmail`.
+5. (Optional) `rm -rf ~/.gmail-mcp/` if no other host-side tool needs the real OAuth credentials. These are real tokens — shred rather than leave them lying around if you're decommissioning.
 
 No `TOOL_ALLOWLIST` removal step — Phase 2 no longer edits it.
 
 ## Notes
 
-- **Stub format is OneCLI-prescribed.** The `access_token: "onecli-managed"` pattern with `expiry_date: 99999999999999` tells the Google auth client the token is valid; OneCLI intercepts the outgoing Gmail API call and rewrites `Authorization: Bearer onecli-managed` to the real token. `expiry_date: 0` (refresh-interception) is an alternative the OneCLI docs describe — both work but OneCLI's own `migrate` command writes the far-future variant, which is what this skill assumes.
-- **Scopes are set at OAuth connect time.** If the agent needs scopes beyond what's currently connected (e.g. the user later wants `calendar.readonly` for combined email/calendar workflows), disconnect and reconnect Gmail in the OneCLI web UI with the expanded scope set.
-- **This is tool-only.** Inbound email as a channel (emails trigger the agent) is a separate piece of work — it needs a `src/channels/gmail.ts` adapter that polls the inbox and routes to a messaging group. The pre-v2 qwibitai skill had this; it has not been ported to v2's channel architecture as of v2.0.0.
+- **Scopes are set at OAuth consent time.** If the agent needs scopes beyond what you granted during the Phase 1 auth flow (e.g. the user later wants `calendar.readonly` for combined email/calendar workflows), re-run the auth flow with the expanded scope set so a fresh `credentials.json` with the new grant is written.
+- **This is tool-only.** Inbound email as a channel (emails trigger the agent) is a separate piece of work — it needs a `src/channels/gmail.ts` adapter that polls the inbox and routes to a messaging group. It has not been ported to v2's channel architecture.
 
 ## Credits & references
 
 - **MCP server:** [`@gongrzhe/server-gmail-autoauth-mcp`](https://github.com/GongRzhe/Gmail-MCP-Server) by GongRzhe — MIT-licensed.
-- **OneCLI credential stubs:** pattern documented at `https://onecli.sh/docs/guides/credential-stubs/gmail.md`.
-- **Skill pattern:** modeled on [`add-atomic-chat-tool`](../add-atomic-chat-tool/SKILL.md) and [`add-vercel`](../add-vercel/SKILL.md).
-- **Addresses:** [issue #1500](https://github.com/nanocoai/nanomika/issues/1500) (proxy Gmail/Calendar OAuth tokens through credential proxy) for the Gmail side.
-- **Related PRs:** [#1810](https://github.com/nanocoai/nanomika/pull/1810) (pre-install Gmail/Notion MCP) overlaps on the "install the MCP server in the image" idea but bundles many unrelated changes; this skill is the focused OneCLI-native version.
+- **Skill pattern:** modeled on [`add-gcal-tool`](../add-gcal-tool/SKILL.md).
