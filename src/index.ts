@@ -54,18 +54,18 @@ async function dispatchResponse(payload: ResponsePayload): Promise<void> {
 }
 
 // Channel barrel — each enabled channel self-registers on import.
-// Channel skills uncomment lines in channels/index.ts to enable them.
+// Add or enable a channel by editing channels/index.ts.
 import './channels/index.js';
 
-// Modules barrel — default modules (typing, mount-security) ship here; skills
-// append registry-based modules. Imported for side effects (registrations).
+// Modules barrel — imported for side effects (each module registers its
+// hooks, delivery actions and response handlers).
 import './modules/index.js';
 
 // CLI command barrel — populates the `ncl` registry before the CLI server
 // accepts connections.
 import './cli/commands/index.js';
 import './cli/delivery-action.js';
-import { startCliServer, stopCliServer } from './cli/socket-server.js';
+import { ensureSocketPathFits, startCliServer, stopCliServer } from './cli/socket-server.js';
 
 import type { ChannelAdapter, ChannelSetup } from './channels/adapter.js';
 import { initChannelAdapters, teardownChannelAdapters, getChannelAdapter } from './channels/channel-registry.js';
@@ -77,6 +77,7 @@ async function main(): Promise<void> {
 
   // 0. Preflight: fail fast on missing config before the restart backoff, so
   // fixing one thing at a time never waits on the circuit breaker.
+  ensureSocketPathFits();
   ensureCredentialsConfigured();
   ensureContainerRuntimeRunning();
   ensureAgentImagePresent(CONTAINER_IMAGE);
@@ -101,7 +102,6 @@ async function main(): Promise<void> {
   // host-side proxy, which injects the real key/token. Must be up before any
   // container spawns.
   credentialProxyServer = await startCredentialProxy(CREDENTIAL_PROXY_PORT, PROXY_BIND_HOST);
-  log.info('Credential proxy started', { port: CREDENTIAL_PROXY_PORT, host: PROXY_BIND_HOST });
 
   // 3. Channel adapters
   await initChannelAdapters((adapter: ChannelAdapter): ChannelSetup => {
