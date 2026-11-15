@@ -37,9 +37,7 @@ export interface ContainerConfig {
   additionalMounts: AdditionalMountConfig[];
   skills: string[] | 'all';
   provider?: string;
-  groupName?: string;
   assistantName?: string;
-  agentGroupId?: string;
   maxMessagesPerPrompt?: number;
   model?: string;
   effort?: string;
@@ -57,9 +55,7 @@ export function configFromDb(row: ContainerConfigRow, group: AgentGroup): Contai
     additionalMounts: JSON.parse(row.additional_mounts) as AdditionalMountConfig[],
     skills: JSON.parse(row.skills) as string[] | 'all',
     provider: row.provider ?? undefined,
-    groupName: group.name,
     assistantName: row.assistant_name ?? group.name,
-    agentGroupId: group.id,
     maxMessagesPerPrompt: row.max_messages_per_prompt ?? undefined,
     model: row.model ?? undefined,
     effort: row.effort ?? undefined,

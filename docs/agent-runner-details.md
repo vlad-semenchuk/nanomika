@@ -402,7 +402,7 @@ Because `outbound.db` lives in the session folder on the host, the continuation 
 
 `index.ts` reads its configuration from:
 
-- **`/workspace/agent/container.json`** (read-only mount, written by the host from the group's `container_configs` row): `provider` (default `claude`), `assistantName`, `groupName`, `agentGroupId`, `maxMessagesPerPrompt`, `mcpServers`, `model`, `effort`. Loaded by `config.ts`.
+- **`/workspace/agent/container.json`** (read-only mount, written by the host from the group's `container_configs` row): `provider` (default `claude`), `assistantName`, `maxMessagesPerPrompt`, `mcpServers`, `model`, `effort`. Loaded by `config.ts`.
 - **Environment:** only variables read by code NanoMika doesn't own: `TZ`, `ANTHROPIC_BASE_URL` (pointing at the host credential proxy) with a placeholder `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`, and any provider-contributed env. The real credential never enters the container.
 - **Fixed mount paths:** `/workspace/inbound.db`, `/workspace/outbound.db`, `/workspace/outbox/`, `/workspace/agent/` (agent group folder), `/app/src/` (agent-runner source, RO), `/app/skills/` (container skills, RO), `/app/CLAUDE.md` (shared base instructions, RO), `/home/node/.claude/` (per-group Claude state). Optional extra mounts appear under `/workspace/extra/*`.
 
