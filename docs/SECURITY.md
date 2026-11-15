@@ -45,6 +45,7 @@ An agent group can be given additional host folders. Each one is checked against
 - A path must be inside one of the `allowedRoots`. Symlinks are resolved before the check.
 - A root with `allowReadWrite: false` is always mounted read-only.
 - Paths containing any of these are refused even inside an allowed root: `.ssh`, `.gnupg`, `.gpg`, `.aws`, `.azure`, `.gcloud`, `.kube`, `.docker`, `credentials`, `.env`, `.netrc`, `.npmrc`, `.pypirc`, `id_rsa`, `id_ed25519`, `private_key`, `.secret`, plus your own `blockedPatterns`.
+- These checks look at the folder being mounted, not at the files inside it. Mounting a folder that contains a `.env` gives the agent that file.
 
 See [config-examples/mount-allowlist.json](../config-examples/mount-allowlist.json).
 
@@ -90,7 +91,7 @@ A message from a chat that is not wired to any agent is never delivered to an ag
 
 Every dropped message is recorded with a reason: `pnpm run ncl dropped-messages list`.
 
-Slash commands are checked on the host before they reach a container (`src/command-gate.ts`). `/clear`, `/compact`, `/context`, `/cost` and `/files` need an owner or admin. `/help`, `/login`, `/logout`, `/doctor`, `/config` and `/remote-control` are dropped.
+Slash commands are checked on the host before they reach a container (`src/command-gate.ts`). `/clear`, `/compact`, `/context`, `/cost` and `/files` need an owner or admin. `/help`, `/login`, `/logout`, `/doctor`, `/config` and `/remote-control` are dropped. A slash command one agent sends to another gets the same check, and an agent is never an owner or admin.
 
 ## 6. What an agent can change
 
@@ -102,13 +103,13 @@ An agent can use `ncl` from inside its container, limited by the group's `cli_sc
 | `group` (default) | Only `groups`, `sessions`, `destinations` and `members`, and only for its own agent group. It cannot change `cli_scope`. |
 | `global` | All resources |
 
-Read operations run directly. Operations that change something (configuration, packages, MCP servers, wirings, roles) are sent to an owner or admin as an approval request showing the exact command. Nothing changes until it is approved.
+Read operations run directly. Operations that change something (configuration, packages, MCP servers, wirings, roles) are sent to an owner or admin as an approval request showing the exact command. Nothing changes until it is approved, and only an owner or admin can approve: a click from anyone else is ignored.
 
 An agent can send messages only to its destinations, and can always reply to the chat a message came from.
 
 An agent can create another agent with the `create_agent` tool without approval. The new agent has its own folder and container and is reachable only from the agent that created it.
 
-Files an agent sends are read from the session's outbox folder. Attachment names are sanitised before anything is written to disk.
+Files an agent sends, to a chat or to another agent, are read from the session's outbox folder. Symlinks and names that point outside the folder are refused, and attachment names are sanitised before anything is written to disk.
 
 ## 7. Network
 
@@ -121,6 +122,7 @@ Files an agent sends are read from the session's outbox folder. Attachment names
 - **Prompt injection.** Message text, web pages and files can instruct the agent. Isolation limits the damage but does not prevent the attempt.
 - **Data in the agent's folder.** Everything in `groups/<folder>/` and in the session folder is readable and writable by that agent.
 - **Other processes of your OS user.** They can read `.env`, the databases and the sockets.
+- **Races in the session folder.** The host refuses symlinks in a session folder before it reads or writes there, and checks again after reading. An agent that swaps a folder for a symlink between the check and the write could still redirect that write. Node has no API that closes this gap fully.
 - **Linux.** The Linux code paths have not been tested in this release.
 
 ## Reporting a vulnerability
