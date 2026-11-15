@@ -16,7 +16,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
-import { GROUPS_DIR } from './config.js';
+import { resolveGroupFolderPath } from './group-folder.js';
 import type { McpServerConfig } from './container-config.js';
 import { getContainerConfig } from './db/container-configs.js';
 import type { AgentGroup } from './types.js';
@@ -39,7 +39,7 @@ const COMPOSED_HEADER = '<!-- Composed at spawn — do not edit. Edit CLAUDE.loc
  * an empty `CLAUDE.local.md` if missing.
  */
 export function composeGroupClaudeMd(group: AgentGroup): void {
-  const groupDir = path.resolve(GROUPS_DIR, group.folder);
+  const groupDir = resolveGroupFolderPath(group.folder);
   if (!fs.existsSync(groupDir)) {
     fs.mkdirSync(groupDir, { recursive: true });
   }

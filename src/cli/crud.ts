@@ -32,6 +32,8 @@ export interface ColumnDef {
   default?: unknown;
   /** Allowed values (shown in help). */
   enum?: string[];
+  /** Throws when a provided value is not acceptable. */
+  validate?: (value: unknown) => void;
 }
 
 export interface CustomOperation {
@@ -145,6 +147,7 @@ function genericCreate(def: ResourceDef) {
         if (col.enum && !col.enum.includes(String(v))) {
           throw new Error(`${col.name} must be one of: ${col.enum.join(', ')}`);
         }
+        col.validate?.(v);
         values[col.name] = col.type === 'number' ? Number(v) : v;
       } else if (col.required) {
         throw new Error(`--${col.name.replace(/_/g, '-')} is required`);

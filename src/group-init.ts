@@ -1,7 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 
-import { DATA_DIR, GROUPS_DIR } from './config.js';
+import { DATA_DIR } from './config.js';
+import { resolveGroupFolderPath } from './group-folder.js';
 import { ensureContainerConfig } from './db/container-configs.js';
 import { log } from './log.js';
 import type { AgentGroup } from './types.js';
@@ -50,7 +51,7 @@ export function initGroupFilesystem(group: AgentGroup, opts?: { instructions?: s
   const initialized: string[] = [];
 
   // 1. groups/<folder>/ — group memory + working dir
-  const groupDir = path.resolve(GROUPS_DIR, group.folder);
+  const groupDir = resolveGroupFolderPath(group.folder);
   if (!fs.existsSync(groupDir)) {
     fs.mkdirSync(groupDir, { recursive: true });
     initialized.push('groupDir');

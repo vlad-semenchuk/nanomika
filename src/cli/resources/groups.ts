@@ -1,8 +1,9 @@
-import type { McpServerConfig } from '../../container-config.js';
+import { assertValidPackage, type McpServerConfig } from '../../container-config.js';
 import { buildAgentGroupImage, killContainer, wakeContainer } from '../../container-runner.js';
 import { restartAgentGroupContainers } from '../../container-restart.js';
 import { getDb, hasTable } from '../../db/connection.js';
 import { getSession } from '../../db/sessions.js';
+import { assertValidGroupFolder } from '../../group-folder.js';
 import { writeSessionMessage } from '../../session-manager.js';
 import {
   getContainerConfig,
@@ -53,8 +54,9 @@ registerResource({
       name: 'folder',
       type: 'string',
       description:
-        'Directory name under groups/ on the host. Must be unique. Contains CLAUDE.md, skills/, and container.json. Cannot be changed after creation.',
+        'Directory name under groups/ on the host: letters, digits, "-" and "_", up to 64 characters. Must be unique. Contains CLAUDE.md, skills/, and container.json. Cannot be changed after creation.',
       required: true,
+      validate: (v) => assertValidGroupFolder(String(v)),
     },
     { name: 'created_at', type: 'string', description: 'Auto-set.', generated: true },
   ],
@@ -315,6 +317,8 @@ registerResource({
         const apt = args.apt as string | undefined;
         const npm = args.npm as string | undefined;
         if (!apt && !npm) throw new Error('Provide --apt <pkg> or --npm <pkg>');
+        if (apt) assertValidPackage('apt', apt);
+        if (npm) assertValidPackage('npm', npm);
 
         if (apt) {
           const existing = JSON.parse(row.packages_apt) as string[];

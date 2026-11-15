@@ -3,8 +3,9 @@
  * Spawns agent containers with session folder + agent group folder mounts.
  * The container runs the v2 agent-runner which polls the session DB.
  */
-import { ChildProcess, execSync, spawn } from 'child_process';
+import { ChildProcess, execFileSync, spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import {
@@ -13,10 +14,9 @@ import {
   CONTAINER_INSTALL_LABEL,
   CREDENTIAL_PROXY_PORT,
   DATA_DIR,
-  GROUPS_DIR,
   TIMEZONE,
 } from './config.js';
-import { materializeContainerJson } from './container-config.js';
+import { assertValidPackage, materializeContainerJson } from './container-config.js';
 import { getContainerConfig } from './db/container-configs.js';
 import { updateContainerConfigScalars } from './db/container-configs.js';
 import {
@@ -30,6 +30,7 @@ import { detectAuthMode } from './credential-proxy.js';
 import { composeGroupClaudeMd } from './claude-md-compose.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { getDb, hasTable } from './db/connection.js';
+import { resolveGroupFolderPath } from './group-folder.js';
 import { initGroupFilesystem } from './group-init.js';
 import { stopTypingRefresh } from './modules/typing/index.js';
 import { log } from './log.js';
@@ -253,7 +254,7 @@ function buildMounts(
 
   const mounts: VolumeMount[] = [];
   const sessDir = sessionDir(agentGroup.id, session.id);
-  const groupDir = path.resolve(GROUPS_DIR, agentGroup.folder);
+  const groupDir = resolveGroupFolderPath(agentGroup.folder);
 
   // Session folder at /workspace (contains inbound.db, outbound.db, outbox/, .claude/)
   mounts.push({ hostPath: sessDir, containerPath: '/workspace', readonly: false });
@@ -465,6 +466,8 @@ export async function buildAgentGroupImage(agentGroupId: string): Promise<void> 
   if (aptPackages.length === 0 && npmPackages.length === 0) {
     throw new Error('No packages to install. Add one with `ncl groups config add-package` first.');
   }
+  for (const p of aptPackages) assertValidPackage('apt', p);
+  for (const p of npmPackages) assertValidPackage('npm', p);
 
   let dockerfile = `FROM ${CONTAINER_IMAGE}\nUSER root\n`;
   if (aptPackages.length > 0) {
@@ -484,17 +487,13 @@ export async function buildAgentGroupImage(agentGroupId: string): Promise<void> 
 
   log.info('Building per-agent-group image', { agentGroupId, imageTag, apt: aptPackages, npm: npmPackages });
 
-  // Write Dockerfile to temp file and build
-  const tmpDockerfile = path.join(DATA_DIR, `Dockerfile.${agentGroupId}`);
-  fs.writeFileSync(tmpDockerfile, dockerfile);
+  // Build from an empty temporary context so nothing on the host is sent to the build.
+  const buildDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nanomika-build-'));
+  fs.writeFileSync(path.join(buildDir, 'Dockerfile'), dockerfile);
   try {
-    execSync(`${CONTAINER_RUNTIME_BIN} build -t ${imageTag} -f ${tmpDockerfile} .`, {
-      cwd: DATA_DIR,
-      stdio: 'pipe',
-      timeout: 900_000,
-    });
+    execFileSync(CONTAINER_RUNTIME_BIN, ['build', '-t', imageTag, buildDir], { stdio: 'pipe', timeout: 900_000 });
   } finally {
-    fs.unlinkSync(tmpDockerfile);
+    fs.rmSync(buildDir, { recursive: true, force: true });
   }
 
   // Store the image tag in the DB
