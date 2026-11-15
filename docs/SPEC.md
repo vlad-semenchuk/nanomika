@@ -225,14 +225,12 @@ Channels self-register using a barrel-import pattern:
 
 ### Adding a New Channel
 
-To add a new channel, contribute a skill to `.claude/skills/add-<name>/` that:
+A new channel:
 
 1. Adds a `src/channels/<name>.ts` file implementing the `Channel` interface
 2. Calls `registerChannel(name, factory)` at module load
 3. Returns `null` from the factory if credentials are missing
 4. Adds an import line to `src/channels/index.ts`
-
-See existing skills (`/add-whatsapp`, `/add-telegram`, `/add-slack`, `/add-discord`, `/add-gmail`) for the pattern.
 
 ---
 
@@ -282,18 +280,6 @@ nanomika/
 │
 ├── dist/                          # Compiled JavaScript (gitignored)
 │
-├── .claude/
-│   └── skills/
-│       ├── setup/SKILL.md              # /setup - First-time installation
-│       ├── customize/SKILL.md          # /customize - Add capabilities
-│       ├── debug/SKILL.md              # /debug - Container debugging
-│       ├── add-telegram/SKILL.md       # /add-telegram - Telegram channel
-│       ├── add-gmail/SKILL.md          # /add-gmail - Gmail integration
-│       ├── add-voice-transcription/    # /add-voice-transcription - Whisper
-│       ├── x-integration/SKILL.md      # /x-integration - X/Twitter
-│       ├── convert-to-apple-container/  # /convert-to-apple-container - Apple Container runtime
-│       └── add-parallel/SKILL.md       # /add-parallel - Parallel agents
-│
 ├── groups/
 │   ├── CLAUDE.md                  # Global memory (all groups read this)
 │   ├── {channel}_main/             # Main control channel (e.g., whatsapp_main/)
@@ -317,9 +303,6 @@ nanomika/
 │   ├── nanomika.log               # Host stdout
 │   └── nanomika.error.log         # Host stderr
 │   # Note: Per-container logs are in groups/{folder}/logs/container-*.log
-│
-└── launchd/
-    └── com.nanomika.plist         # macOS service configuration
 ```
 
 ---
@@ -651,7 +634,7 @@ When NanoMika starts, it:
 
 ### Service: com.nanomika
 
-**launchd/com.nanomika.plist:**
+**Example launchd plist:**
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "...">
@@ -691,7 +674,7 @@ When NanoMika starts, it:
 
 ```bash
 # Install service
-cp launchd/com.nanomika.plist ~/Library/LaunchAgents/
+# (copy your plist into ~/Library/LaunchAgents/)
 
 # Start service
 launchctl load ~/Library/LaunchAgents/com.nanomika.plist
