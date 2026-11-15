@@ -1,6 +1,6 @@
 {
   "name": "nanomika",
-  "version": "2.0.70",
+  "version": "3.0.0",
   "description": "Personal Claude assistant. Lightweight, secure, customizable.",
   "type": "module",
   "repository": {
