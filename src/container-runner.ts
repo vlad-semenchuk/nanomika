@@ -442,14 +442,16 @@ async function buildContainerArgs(
     }
   }
 
-  // Override entrypoint: run v2 entry point directly via Bun (no tsc, no stdin).
-  args.push('--entrypoint', 'bash');
+  // tini as PID 1 reaps Chromium zombies and forwards SIGTERM to bun, so
+  // in-flight outbound.db writes finish. Stated here so a per-group image or
+  // a CONTAINER_IMAGE override with another entrypoint still runs the same way.
+  args.push('--entrypoint', '/usr/bin/tini');
 
   // Use per-agent-group image if one has been built, otherwise base image
   const imageTag = containerConfig.imageTag || CONTAINER_IMAGE;
   args.push(imageTag);
 
-  args.push('-c', 'exec bun run /app/src/index.ts');
+  args.push('--', 'bun', 'run', '/app/src/index.ts');
 
   return args;
 }

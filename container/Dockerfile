@@ -113,18 +113,15 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
 RUN printf '#!/bin/sh\nexec bun /app/src/cli/ncl.ts "$@"\n' > /usr/local/bin/ncl && \
     chmod +x /usr/local/bin/ncl
 
-# ---- Entrypoint --------------------------------------------------------------
-COPY entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
-
 # ---- Workspace + permissions -------------------------------------------------
-RUN mkdir -p /workspace/group /workspace/extra && \
+RUN mkdir -p /workspace/agent /workspace/extra && \
     chown -R node:node /workspace && \
     chmod 777 /home/node
 
 USER node
-WORKDIR /workspace/group
+WORKDIR /workspace/agent
 
-# tini is PID 1, reaps zombies, forwards signals cleanly. entrypoint.sh does
-# `exec bun ...` so bun runs as tini's direct child.
-ENTRYPOINT ["/usr/bin/tini", "--", "/app/entrypoint.sh"]
+# tini is PID 1, reaps zombies, forwards signals cleanly; bun is its direct
+# child. The host spawns sessions with the same command (src/container-runner.ts).
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["bun", "run", "/app/src/index.ts"]

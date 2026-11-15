@@ -43,16 +43,12 @@ Both are committed. CI installs both with `--frozen-lockfile`, and the Dockerfil
 - **Pinned ARGs** — `BUN_VERSION`, `CLAUDE_CODE_VERSION`, `PNPM_VERSION`, `AGENT_BROWSER_VERSION`. The base image is pinned by digest. Bump deliberately in PRs.
 - **CJK fonts** — `ARG INSTALL_CJK_FONTS=false`. `container/build.sh` reads `INSTALL_CJK_FONTS` from `.env` and passes it through. Default build saves ~200MB; opt in when the user works with Chinese/Japanese/Korean content.
 - **BuildKit cache mounts** — `/var/cache/apt`, `/var/lib/apt`, `/root/.bun/install/cache`, `/root/.cache/pnpm`. Rebuilds where `package.json`/`bun.lock` haven't changed are fast. Requires BuildKit (default on Docker 23+).
-- **`tini` as init** — reaps Chromium zombies, forwards signals so in-flight `outbound.db` writes finalize on SIGTERM.
-- **`entrypoint.sh`** (extracted) — `exec bun run /app/src/index.ts` under tini. Readable and diffable.
+- **`tini` as init** — PID 1 in every session container. Reaps Chromium zombies and forwards signals so in-flight `outbound.db` writes finalize on SIGTERM. `bun run /app/src/index.ts` runs as its direct child.
 - **No compiled `/app/dist`** — Bun runs TS directly. The host also mounts fresh source over `/app/src` at session start, so host edits take effect without rebuilding the image.
 
-## Session wake (two paths)
+## Session start
 
-1. **Base image ENTRYPOINT** — used only when the image is run directly (e.g. a manual `docker run -i` with JSON on stdin): `tini --> entrypoint.sh` captures stdin to `/tmp/input.json`, then `exec bun run /app/src/index.ts`.
-2. **Host-spawned session** — `src/container-runner.ts` (line ~440) uses `--entrypoint bash` with `-c 'exec bun run /app/src/index.ts'`. Bypasses tini (Docker's default PID 1 handling applies). Stdin is unused; all IO flows through the mounted session DBs.
-
-Both paths end with Bun running the same source file from `/app/src/index.ts`.
+`buildContainerArgs` in `src/container-runner.ts` runs `--entrypoint /usr/bin/tini <image> -- bun run /app/src/index.ts`, the same command as the image's `ENTRYPOINT` and `CMD`. It names the entrypoint so a per-group image or a `CONTAINER_IMAGE` override starts the same way. Stdin is unused; all IO flows through the mounted session DBs.
 
 ## CI shape
 

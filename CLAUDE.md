@@ -225,7 +225,7 @@ The agent container runs on **Bun**; the host runs on **Node** (pnpm). They comm
 - **Writing a new named-param SQL insert/update in the container** → use `$name` in both SQL and JS keys: `.run({ $id: msg.id })`. `bun:sqlite` does not auto-strip the prefix the way `better-sqlite3` does on the host. Positional `?` params work normally.
 - **Adding a test in `container/agent-runner/src/`** → import from `bun:test`, not `vitest`. Vitest runs on Node and can't load `bun:sqlite`. `vitest.config.ts` excludes this tree.
 - **Adding a Node CLI the agent invokes at runtime** (like `agent-browser`, `claude-code`) → put it in the Dockerfile's pnpm global-install block, pinned to an exact version via a new `ARG`. Don't use `bun install -g` — that bypasses the pnpm supply-chain policy.
-- **Changing the Dockerfile entrypoint or the spawn command** (`buildContainerArgs` in `src/container-runner.ts`) → keep `exec bun ...` so signals forward cleanly. The image has no `/app/dist`; don't reintroduce a tsc build step.
+- **Changing the Dockerfile entrypoint or the spawn command** (`buildContainerArgs` in `src/container-runner.ts`) → keep tini as PID 1 with bun as its direct child, so signals forward cleanly. The image has no `/app/dist`; don't reintroduce a tsc build step.
 - **Changing session-DB pragmas** (`container/agent-runner/src/db/connection.ts`) → `journal_mode=DELETE` is load-bearing for cross-mount visibility. Read the comment block at the top of the file first.
 
 ## CJK font support
