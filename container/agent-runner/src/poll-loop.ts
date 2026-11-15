@@ -2,7 +2,7 @@ import { findByName, getAllDestinations, type DestinationEntry } from './destina
 import { getPendingMessages, markProcessing, markCompleted, type MessageInRow } from './db/messages-in.js';
 import { writeMessageOut } from './db/messages-out.js';
 import { getInboundDb, touchHeartbeat, clearStaleProcessingAcks } from './db/connection.js';
-import { clearContinuation, migrateLegacyContinuation, setContinuation } from './db/session-state.js';
+import { clearContinuation, getContinuation, setContinuation } from './db/session-state.js';
 import { clearCurrentInReplyTo, setCurrentInReplyTo } from './current-batch.js';
 import {
   formatMessages,
@@ -80,7 +80,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
   // provider decides how to use it (Claude resumes a .jsonl transcript,
   // other providers may reload a thread ID, etc.). Keyed per-provider so
   // a Codex thread id never gets handed to Claude or vice versa.
-  let continuation: string | undefined = migrateLegacyContinuation(config.providerName);
+  let continuation: string | undefined = getContinuation(config.providerName);
 
   // Before resuming, drop a session whose on-disk transcript has grown too
   // large/old to cold-resume within the host's idle ceiling. Without this a

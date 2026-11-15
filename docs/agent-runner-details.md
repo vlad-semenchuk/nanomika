@@ -392,7 +392,7 @@ Separately, `compact-instructions.ts` prints compaction instructions (preserve m
 
 The continuation (Claude session ID) is stored per provider in the `session_state` table of `outbound.db` under the key `continuation:<provider>`:
 
-- On startup, `migrateLegacyContinuation()` loads it (adopting a legacy `sdk_session_id` row if present), then `maybeRotateContinuation()` may drop it.
+- On startup, `getContinuation()` loads it, then `maybeRotateContinuation()` may drop it.
 - On each `init` event it is saved immediately, so a mid-turn crash still resumes on the next wake.
 - `/clear` and an invalid-session error clear it.
 
