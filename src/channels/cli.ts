@@ -11,8 +11,8 @@
  *
  *   Client → server:
  *     { "text": "user message" }                          # default — talk to cli/local
- *     { "text": "...", "to": {"channelType": "discord",
- *                             "platformId": "discord:@me:149...",
+ *     { "text": "...", "to": {"channelType": "slack",
+ *                             "platformId": "slack:C0123...",
  *                             "threadId": null} }         # route to a specific mg
  *     { "text": "...", "to": {...}, "reply_to": {...} }   # + redirect replies
  *     { "backlog": true }                                 # only print what was missed
@@ -25,8 +25,8 @@
  * the adapter turns that into an action from `cli:local` instead of routing
  * it to the agent.
  *
- * The `to` and `reply_to` addressing is how admin transports (the bootstrap
- * script) inject messages targeting any wired channel. `reply_to` is a
+ * The `to` and `reply_to` addressing lets an operator script inject a
+ * message targeting any wired channel. `reply_to` is a
  * router-layer concept — agents cannot set it; it is carried only on
  * inbound events from CLI clients that hold operator privilege (the socket
  * is chmod 0600, so "connected to this socket" ≈ "is the owner").
