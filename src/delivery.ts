@@ -22,6 +22,7 @@ import { getMessagingGroupByPlatform } from './db/messaging-groups.js';
 import {
   getDueOutboundMessages,
   getDeliveredIds,
+  isMidWriteError,
   markDelivered,
   markDeliveryFailed,
   migrateDeliveredTable,
@@ -182,7 +183,14 @@ async function drainSession(session: Session): Promise<void> {
 
   try {
     // Read all due messages from outbound.db (read-only)
-    const allDue = getDueOutboundMessages(outDb);
+    let allDue: ReturnType<typeof getDueOutboundMessages>;
+    try {
+      allDue = getDueOutboundMessages(outDb);
+    } catch (err) {
+      if (!isMidWriteError(err)) throw err;
+      log.debug('outbound.db is being written, retrying next poll', { sessionId: session.id });
+      return;
+    }
     if (allDue.length === 0) return;
 
     // Filter out already-delivered messages using inbound.db's delivered table

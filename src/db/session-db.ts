@@ -49,6 +49,17 @@ export function openInboundDb(dbPath: string): Database.Database {
   return db;
 }
 
+/**
+ * True when a read-only outbound.db read failed because the container is in
+ * the middle of a write. File locks don't cross the VM mount, so the
+ * container's journal looks abandoned, and a read-only connection must not
+ * roll it back. Retry later.
+ */
+export function isMidWriteError(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return code === 'SQLITE_READONLY_ROLLBACK' || code === 'SQLITE_BUSY';
+}
+
 /** Open the outbound DB for a session (host reads only). */
 export function openOutboundDb(dbPath: string): Database.Database {
   const db = openSessionDb(dbPath, { readonly: true });
