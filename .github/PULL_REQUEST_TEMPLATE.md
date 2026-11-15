@@ -1,18 +1,15 @@
-<!-- contributing-guide: v1 -->
-## Type of Change
-
-- [ ] **Feature skill** - adds a channel or integration (source code changes + SKILL.md)
-- [ ] **Utility skill** - adds a standalone tool (code files in `.claude/skills/<name>/`, no source changes)
-- [ ] **Operational/container skill** - adds a workflow or agent skill (SKILL.md only, no source changes)
-- [ ] **Fix** - bug fix or security fix to source code
-- [ ] **Simplification** - reduces or simplifies source code
-- [ ] **Documentation** - docs, README, or CONTRIBUTING changes only
-
-## Description
+## What changed
 
 
-## For Skills
+## Why
 
-- [ ] SKILL.md contains instructions, not inline code (code goes in separate files)
-- [ ] SKILL.md is under 500 lines
-- [ ] I tested this skill on a fresh clone
+
+## How it was tested
+
+
+## Checklist
+
+- [ ] `pnpm run typecheck`, `pnpm run lint`, `pnpm run format:check` and `pnpm test` pass
+- [ ] Agent-runner typecheck and `bun test` pass (if `container/agent-runner/` changed)
+- [ ] Feature PRs: lines added to `src/` and why it belongs in core are stated above
+- [ ] No secrets or runtime data committed
