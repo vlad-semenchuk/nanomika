@@ -464,7 +464,7 @@ export async function buildAgentGroupImage(agentGroupId: string): Promise<void> 
   const aptPackages = JSON.parse(configRow.packages_apt) as string[];
   const npmPackages = JSON.parse(configRow.packages_npm) as string[];
   if (aptPackages.length === 0 && npmPackages.length === 0) {
-    throw new Error('No packages to install. Use install_packages first.');
+    throw new Error('No packages to install. Add one with `ncl groups config add-package` first.');
   }
 
   let dockerfile = `FROM ${CONTAINER_IMAGE}\nUSER root\n`;

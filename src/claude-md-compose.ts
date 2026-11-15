@@ -78,7 +78,7 @@ export function composeGroupClaudeMd(group: AgentGroup): void {
 
   // Built-in module fragments — every MCP tool source file that ships a
   // sibling `<name>.instructions.md`. These describe how the agent should
-  // use that module's MCP tools (schedule_task, install_packages, etc.).
+  // use that module's MCP tools (schedule_task, ask_user_question, etc.).
   // Skip cli.instructions.md when cli_scope is disabled.
   const cliDisabled = configRow?.cli_scope === 'disabled';
   const mcpToolsHostDir = path.join(process.cwd(), MCP_TOOLS_HOST_SUBPATH);

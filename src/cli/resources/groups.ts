@@ -333,7 +333,7 @@ registerResource({
 
         return {
           added: { apt: apt || null, npm: npm || null },
-          note: 'Image rebuild required for packages to take effect. Use install_packages from the agent or rebuild manually.',
+          note: 'Image rebuild required for packages to take effect: run `ncl groups restart --rebuild`.',
         };
       },
     },
