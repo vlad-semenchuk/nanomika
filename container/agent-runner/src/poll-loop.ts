@@ -347,6 +347,9 @@ async function processQuery(
         // host-generated welcome trigger with null thread vs a Discord DM reply).
         const newMessages = pending.filter((m) => m.kind !== 'system');
         if (newMessages.length === 0) return;
+        // Same accumulate gate as the outer loop: context-only rows (trigger=0)
+        // wait for the next trigger=1 message instead of waking the agent.
+        if (!newMessages.some((m) => m.trigger === 1)) return;
 
         const newIds = newMessages.map((m) => m.id);
         markProcessing(newIds);

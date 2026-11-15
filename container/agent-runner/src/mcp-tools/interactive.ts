@@ -105,7 +105,7 @@ export const askUserQuestion: McpToolDefinition = {
       }),
     });
 
-    log(`ask_user_question: ${questionId} → "${question}" [${options.join(', ')}]`);
+    log(`ask_user_question: ${questionId} → "${question}" [${options.map((o) => o.label).join(', ')}]`);
 
     // Poll for response in inbound.db (host writes the response there)
     const deadline = Date.now() + timeout;
