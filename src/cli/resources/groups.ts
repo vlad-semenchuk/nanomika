@@ -228,7 +228,14 @@ registerResource({
             'provider' | 'model' | 'effort' | 'image_tag' | 'assistant_name' | 'max_messages_per_prompt' | 'cli_scope'
           >
         > = {};
-        if (args.provider !== undefined) updates.provider = args.provider as string;
+        if (args.provider !== undefined) {
+          // An unknown name would crash every container at startup. `mock`
+          // is the test provider; it answers with canned text.
+          if (!['claude', 'mock'].includes(String(args.provider))) {
+            throw new Error('--provider must be one of: claude, mock');
+          }
+          updates.provider = args.provider as string;
+        }
         if (args.model !== undefined) updates.model = args.model as string;
         if (args.effort !== undefined) updates.effort = args.effort as string;
         if (args.image_tag !== undefined) updates.image_tag = args.image_tag as string;

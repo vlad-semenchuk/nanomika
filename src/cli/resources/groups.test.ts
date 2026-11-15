@@ -253,4 +253,11 @@ describe('groups CLI input validation', () => {
     expect((await run('groups-config-add-package', { id: 'ag-1', apt: 'ffmpeg' })).ok).toBe(true);
     expect((await run('groups-config-add-package', { id: 'ag-1', npm: '@scope/pkg@1.2.3' })).ok).toBe(true);
   });
+
+  it('refuses an unknown provider', async () => {
+    createAgentGroup({ id: 'ag-1', name: 'A', folder: 'a', agent_provider: null, created_at: now() });
+    ensureContainerConfig('ag-1');
+    expect((await run('groups-config-update', { id: 'ag-1', provider: 'opencode' })).ok).toBe(false);
+    expect((await run('groups-config-update', { id: 'ag-1', provider: 'claude' })).ok).toBe(true);
+  });
 });
