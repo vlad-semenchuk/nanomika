@@ -512,3 +512,24 @@ describe('CLI scope enforcement', () => {
     }
   });
 });
+
+describe('positional ids', () => {
+  const hostCtx: CallerContext = { caller: 'host' };
+
+  it('splits a dash-joined command at the longest registered prefix', async () => {
+    const resp = await dispatch({ id: '1', command: 'test-cmd-sess-123-abc', args: {} }, hostCtx);
+    expect(resp.ok).toBe(true);
+    if (resp.ok) expect((resp.data as { echo: Record<string, unknown> }).echo.id).toBe('sess-123-abc');
+  });
+
+  it('keeps an explicit --id', async () => {
+    const resp = await dispatch({ id: '1', command: 'test-cmd-x', args: { id: 'given' } }, hostCtx);
+    expect(resp.ok).toBe(true);
+    if (resp.ok) expect((resp.data as { echo: Record<string, unknown> }).echo.id).toBe('given');
+  });
+
+  it('still reports an unknown command', async () => {
+    const resp = await dispatch({ id: '1', command: 'nope-a-b', args: {} }, hostCtx);
+    expect(resp.ok).toBe(false);
+  });
+});
