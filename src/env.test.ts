@@ -37,6 +37,11 @@ describe('readEnvFile', () => {
     expect(readEnvFile(['A', 'B'])).toEqual({ A: 'x # y', B: 'p q' });
   });
 
+  it('accepts a quoted value followed by a comment, and an export prefix', () => {
+    write('A="sk-ant-x" # my key\nexport B=plain\nexport C=\'q\'\n');
+    expect(readEnvFile(['A', 'B', 'C'])).toEqual({ A: 'sk-ant-x', B: 'plain', C: 'q' });
+  });
+
   it('returns an empty object when there is no .env', () => {
     expect(readEnvFile(['A'])).toEqual({});
   });
