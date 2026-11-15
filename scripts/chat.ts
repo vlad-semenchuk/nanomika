@@ -1,5 +1,5 @@
 /**
- * ncl — chat with your NanoMika agent from the terminal.
+ * chat — talk to your NanoMika agent from the terminal.
  *
  * Usage:
  *   pnpm run chat <message...>
@@ -7,8 +7,9 @@
  * Sends the message through the CLI channel (Unix socket) to the wired agent.
  * Reads replies until the stream goes quiet, then exits.
  *
- * Preconditions: NanoMika host service running, an agent group wired to
- * `cli/local` via `/init-first-agent` or `/manage-channels`.
+ * Preconditions: the NanoMika host is running (`pnpm start` or `pnpm dev`)
+ * and an agent group is wired to `cli/local` (the host creates one on first
+ * start; see src/bootstrap.ts).
  */
 import net from 'net';
 import path from 'path';
@@ -35,8 +36,8 @@ function main(): void {
   socket.on('error', (err) => {
     const e = err as NodeJS.ErrnoException;
     if (e.code === 'ENOENT' || e.code === 'ECONNREFUSED') {
-      console.error(`NanoMika daemon not reachable at ${socketPath()}.`);
-      console.error('Start the service (launchctl/systemd) before running ncl.');
+      console.error(`chat: cannot reach NanoMika host at ${socketPath()} (${e.code}).`);
+      console.error('Is the host running? Start it with `pnpm start` (or `pnpm dev`) in another terminal.');
     } else {
       console.error('CLI socket error:', err);
     }
