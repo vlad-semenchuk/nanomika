@@ -21,7 +21,7 @@ Rebuild of the project as a small, standalone core that you clone, run and exten
 ### Added
 
 - **First-start bootstrap.** When the database has no agents, the host creates the first agent, the `cli:local` owner and the wiring between them.
-- **Startup checks.** The host stops with a message that names the fix when `.env` has no credential, Docker is not running, the agent image is not built, or the checkout path is too long for a Unix socket.
+- **Startup checks.** The host stops with a message that names the fix when `.env` has no credential, Docker is not running, the agent image is not built, the checkout path is too long for a Unix socket, or the proxy port is taken.
 - **Questions and approvals in the terminal.** The CLI channel prints them with numbered options; answer with `pnpm run chat /answer <id> <choice>`.
 - **Terminal backlog.** Messages that arrive while no chat is open are kept and shown by the next `pnpm run chat`.
 - **`pnpm run build:image`** builds the agent image.

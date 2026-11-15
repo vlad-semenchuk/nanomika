@@ -72,6 +72,25 @@ import { initChannelAdapters, teardownChannelAdapters, getChannelAdapter } from 
 
 let credentialProxyServer: Server | undefined;
 
+async function startProxyOrExplain(): Promise<Server> {
+  if (!PROXY_BIND_HOST) {
+    console.error('\nFATAL: cannot pick an address for the credential proxy (no docker0 interface).');
+    console.error(
+      'Set CREDENTIAL_PROXY_HOST to an address your containers can reach, e.g. CREDENTIAL_PROXY_HOST=172.17.0.1 pnpm start\n',
+    );
+    throw new Error('Credential proxy address unknown: set CREDENTIAL_PROXY_HOST');
+  }
+  try {
+    return await startCredentialProxy(CREDENTIAL_PROXY_PORT, PROXY_BIND_HOST);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+      console.error(`\nFATAL: port ${CREDENTIAL_PROXY_PORT} is in use. Is another NanoMika host already running?`);
+      console.error('Stop it, or start this one on another port, e.g. CREDENTIAL_PROXY_PORT=3002 pnpm start\n');
+    }
+    throw err;
+  }
+}
+
 async function main(): Promise<void> {
   log.info('NanoMika starting');
 
@@ -81,6 +100,12 @@ async function main(): Promise<void> {
   ensureCredentialsConfigured();
   ensureContainerRuntimeRunning();
   ensureAgentImagePresent(CONTAINER_IMAGE);
+
+  // Credential proxy — containers route Anthropic API calls through this
+  // host-side proxy, which injects the real key/token. Started before the
+  // orphan cleanup, so a second host in the same checkout fails here instead
+  // of stopping the first host's containers.
+  credentialProxyServer = await startProxyOrExplain();
 
   // 0b. Circuit breaker — backoff on rapid restarts
   await enforceStartupBackoff();
@@ -97,11 +122,6 @@ async function main(): Promise<void> {
 
   // 2. Container runtime: reap this install's orphans from a previous run
   cleanupOrphans();
-
-  // 2b. Credential proxy — containers route Anthropic API calls through this
-  // host-side proxy, which injects the real key/token. Must be up before any
-  // container spawns.
-  credentialProxyServer = await startCredentialProxy(CREDENTIAL_PROXY_PORT, PROXY_BIND_HOST);
 
   // 3. Channel adapters
   await initChannelAdapters((adapter: ChannelAdapter): ChannelSetup => {

@@ -138,7 +138,7 @@ The Anthropic credential lives only in `.env` and is read only by `src/credentia
 
 - Containers get `ANTHROPIC_BASE_URL=http://host.docker.internal:3001` and a placeholder key or token. The proxy replaces the placeholder with the real credential on the way out.
 - Supported credentials: `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, or `ANTHROPIC_AUTH_TOKEN` with `ANTHROPIC_BASE_URL`.
-- The proxy binds to `127.0.0.1` on macOS and WSL, and to the `docker0` bridge address on Linux. It has no authentication of its own, so it must not be exposed on a public interface.
+- The proxy binds to `127.0.0.1` on macOS and WSL, and to the `docker0` bridge address on Linux (the host refuses to start without `CREDENTIAL_PROXY_HOST` when there is no `docker0`). It has no authentication of its own, so it must not be exposed on a public interface.
 - Channel tokens (Slack) are also read from `.env` with `readEnvFile` and used host-side only.
 
 When changing this code: do not log credential values, do not add a credential to a container's environment, and do not read secrets through `process.env`. [docs/SECURITY.md](docs/SECURITY.md) has the full model.

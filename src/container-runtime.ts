@@ -37,7 +37,9 @@ function detectProxyBindHost(): string {
     const ipv4 = docker0.find((a) => a.family === 'IPv4');
     if (ipv4) return ipv4.address;
   }
-  return '0.0.0.0';
+  // No docker0 (e.g. rootless Docker): do not guess. 0.0.0.0 would expose the
+  // unauthenticated proxy on every interface. Startup asks for CREDENTIAL_PROXY_HOST.
+  return '';
 }
 
 /** CLI args needed for the container to resolve the host gateway. */

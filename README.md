@@ -190,6 +190,7 @@ See [docs/SECURITY.md](docs/SECURITY.md) for the full model.
 | `FATAL: Container runtime failed to start` | Start Docker, check `docker info` |
 | `FATAL: agent image … not found` | `pnpm run build:image` |
 | `FATAL: the socket path is too long` | Move the checkout to a shorter path |
+| `FATAL: port 3001 is in use` | Another host is running from this checkout; stop it, or set `CREDENTIAL_PROXY_PORT` |
 | `chat: cannot reach NanoMika host` | Start the host with `pnpm start` in another terminal |
 | The host waits before starting | It was restarted several times in quick succession and is backing off. A clean stop with Ctrl-C resets this. |
 | No reply | Read the host's terminal output. `pnpm run ncl sessions list` and `pnpm run ncl dropped-messages list` show whether the message was routed. |

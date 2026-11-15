@@ -59,7 +59,7 @@ The Anthropic credential is stored only in `.env`.
 The proxy has no authentication. Anything that can reach its port can make API calls with your credential, though it cannot read the credential itself.
 
 - On macOS and WSL the proxy listens on `127.0.0.1`.
-- On Linux it listens on the `docker0` bridge address, reachable from containers and the host only. If that interface is not found it falls back to `0.0.0.0`, which exposes the port on every interface. Use a firewall in that case.
+- On Linux it listens on the `docker0` bridge address, reachable from containers and the host only. If that interface is not found, the host does not start until you set `CREDENTIAL_PROXY_HOST` to an address your containers can reach.
 
 Agents can call the Anthropic API through the proxy without limit. NanoMika sets no spending cap. Set one on the credential itself.
 
