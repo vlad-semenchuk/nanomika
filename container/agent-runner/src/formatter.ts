@@ -64,7 +64,7 @@ export function categorizeMessage(msg: MessageInRow): CommandInfo {
 export function isClearCommand(msg: MessageInRow): boolean {
   const content = parseContent(msg.content);
   const text = (content.text || '').trim();
-  return text.toLowerCase().startsWith('/clear');
+  return text.split(/\s/)[0].toLowerCase() === '/clear';
 }
 
 /**

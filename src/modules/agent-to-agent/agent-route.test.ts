@@ -444,6 +444,14 @@ describe('routeAgentMessage return-path', () => {
     expect(fs.readFileSync(targetPath, 'utf-8')).toBe('fake-pdf-bytes');
   });
 
+  it('drops admin slash commands sent to another agent', async () => {
+    await routeAgentMessage(
+      { id: 'm-clear', platform_id: B, content: JSON.stringify({ text: '/clear' }), in_reply_to: null },
+      S1,
+    );
+    expect(readInbound(B, SB.id)).toHaveLength(0);
+  });
+
   describe('file forwarding refuses to leave the session folder', () => {
     const SECRET = path.join(TEST_DIR, 'secret-dir');
     beforeEach(() => {

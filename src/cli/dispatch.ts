@@ -15,6 +15,17 @@ import { getResource } from './crud.js';
 import { lookup } from './registry.js';
 
 export async function dispatch(req: RequestFrame, ctx: CallerContext): Promise<ResponseFrame> {
+  // Normalise --dash-keys to underscore_keys up front, so the scope checks
+  // below see the same keys the handlers use. Two spellings of one key with
+  // different values (e.g. agent_group_id and agent-group-id) are refused.
+  const args: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(req.args ?? {})) {
+    const key = k.replace(/-/g, '_');
+    if (key in args && args[key] !== v) return err(req.id, 'invalid-args', `conflicting values for --${k}`);
+    args[key] = v;
+  }
+  req = { ...req, args };
+
   let cmd = lookup(req.command);
 
   // Fallback: if the full command isn't registered, treat the trailing
@@ -69,7 +80,7 @@ export async function dispatch(req: RequestFrame, ctx: CallerContext): Promise<R
       }
 
       // Block cli_scope changes from group-scoped agents (privilege escalation)
-      if (req.args.cli_scope !== undefined || req.args['cli-scope'] !== undefined) {
+      if (req.args.cli_scope !== undefined) {
         return err(req.id, 'forbidden', 'Cannot change cli_scope from a group-scoped agent.');
       }
 
@@ -107,7 +118,7 @@ export async function dispatch(req: RequestFrame, ctx: CallerContext): Promise<R
     const agentName = agentGroup?.name ?? ctx.agentGroupId;
 
     const argSummary = Object.entries(req.args)
-      .map(([k, v]) => `--${k} ${v}`)
+      .map(([k, v]) => `--${k.replace(/_/g, '-')} ${v}`)
       .join(' ');
 
     await requestApproval({

@@ -22,6 +22,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { isSafeAttachmentName } from '../../attachment-safety.js';
+import { gateCommand } from '../../command-gate.js';
 import { getAgentGroup } from '../../db/agent-groups.js';
 import { getInboundSourceSessionId, getMostRecentPeerSourceSessionId } from '../../db/session-db.js';
 import { getSession } from '../../db/sessions.js';
@@ -184,6 +185,16 @@ export async function routeAgentMessage(msg: RoutableAgentMessage, session: Sess
   // agent can actually see and re-send them. Without this, agent-to-agent
   // file attachments look like they arrive but the target has no way to
   // read the bytes — they live in a session dir it doesn't mount.
+  // Slash commands from another agent get the same gate as channel messages.
+  // An agent is never an owner or admin, so admin commands are refused.
+  if (
+    session.agent_group_id !== targetAgentGroupId &&
+    gateCommand(msg.content, null, targetAgentGroupId).action !== 'pass'
+  ) {
+    log.warn('Agent message dropped by command gate', { from: session.agent_group_id, to: targetAgentGroupId });
+    return;
+  }
+
   const forwardedContent = forwardFileAttachments(msg, a2aMsgId, session, targetAgentGroupId, targetSession.id);
 
   writeSessionMessage(targetAgentGroupId, targetSession.id, {

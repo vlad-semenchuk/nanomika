@@ -533,3 +533,22 @@ describe('positional ids', () => {
     expect(resp.ok).toBe(false);
   });
 });
+
+describe('argument spelling', () => {
+  it('refuses two spellings of one key with different values', async () => {
+    mockGetContainerConfig.mockReturnValue({ cli_scope: 'group' });
+    const resp = await dispatch(
+      { id: '1', command: 'members-add', args: { agent_group_id: 'g1', 'agent-group-id': 'victim' } },
+      agentCtx(),
+    );
+    expect(resp.ok).toBe(false);
+    if (!resp.ok) expect(resp.error.code).toBe('invalid-args');
+  });
+
+  it('applies the group scope to dashed keys', async () => {
+    mockGetContainerConfig.mockReturnValue({ cli_scope: 'group' });
+    const resp = await dispatch({ id: '1', command: 'members-add', args: { 'agent-group-id': 'victim' } }, agentCtx());
+    expect(resp.ok).toBe(false);
+    if (!resp.ok) expect(resp.error.code).toBe('forbidden');
+  });
+});
