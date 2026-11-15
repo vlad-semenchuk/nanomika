@@ -19,6 +19,7 @@
  *   Server → client:
  *     { "text": "agent reply" }
  *     { "text": "...", "backlog": true }                  # sent while no terminal was connected
+ *     { "superseded": true }                              # a newer chat client took over
  *
  * The terminal is text-only. Cards print their fallback text, edits and
  * reactions print as new lines, and attached files are saved under
@@ -50,6 +51,7 @@ import net from 'net';
 import path from 'path';
 
 import { DATA_DIR } from '../config.js';
+import { getAskQuestionRender } from '../db/sessions.js';
 import { log } from '../log.js';
 import type { ChannelAdapter, ChannelSetup, DeliveryAddress, InboundEvent, OutboundMessage } from './adapter.js';
 import { normalizeOptions, type NormalizedOption, type RawOption } from './ask-question.js';
@@ -167,7 +169,7 @@ function createAdapter(): ChannelAdapter {
       claimedChatSlot = true;
       if (client && client !== socket) {
         try {
-          client.write(JSON.stringify({ text: '[superseded by a newer client]' }) + '\n');
+          client.write(JSON.stringify({ superseded: true }) + '\n');
           client.end();
         } catch {
           // swallow
@@ -192,7 +194,7 @@ function createAdapter(): ChannelAdapter {
         const line = buffer.slice(0, idx).trim();
         buffer = buffer.slice(idx + 1);
         if (!line) continue;
-        void handleLine(line, config, claimChatSlot);
+        void handleLine(line, config, claimChatSlot, () => client !== null && client !== socket);
       }
     });
 
@@ -206,7 +208,12 @@ function createAdapter(): ChannelAdapter {
     });
   }
 
-  async function handleLine(line: string, config: ChannelSetup, claimChatSlot: () => void): Promise<void> {
+  async function handleLine(
+    line: string,
+    config: ChannelSetup,
+    claimChatSlot: () => void,
+    otherClientLive: () => boolean,
+  ): Promise<void> {
     let payload: {
       backlog?: unknown;
       text?: unknown;
@@ -221,9 +228,11 @@ function createAdapter(): ChannelAdapter {
       log.warn('CLI: ignoring non-JSON line from client', { line });
       return;
     }
+    if (!payload || typeof payload !== 'object') return;
     if (payload.backlog === true) {
       // Catch-up only: claiming the slot flushes the backlog to this client.
-      claimChatSlot();
+      // With a chat already open nothing is in the backlog; leave that chat alone.
+      if (!otherClientLive()) claimChatSlot();
       return;
     }
     if (typeof payload.text !== 'string' || payload.text.length === 0) return;
@@ -265,16 +274,15 @@ function createAdapter(): ChannelAdapter {
 
     const answer = parseAnswerCommand(payload.text);
     if (answer) {
-      const options = pendingQuestions.get(answer.questionId);
-      // Options unknown (e.g. the host restarted since the question was
-      // printed): accept an option name, never a bare number.
-      const value = options
-        ? resolveOption(options, answer.choice)
-        : /^\d+$/.test(answer.choice)
-          ? null
-          : answer.choice.toLowerCase();
+      // Options from this run, or from the database after a host restart.
+      const options = pendingQuestions.get(answer.questionId) ?? getAskQuestionRender(answer.questionId)?.options;
+      if (!options) {
+        reply(`[no open question ${answer.questionId}]`);
+        return;
+      }
+      const value = resolveOption(options, answer.choice);
       if (value === null) {
-        reply(`[unknown option "${answer.choice}" for ${answer.questionId}; answer with an option name]`);
+        reply(`[unknown option "${answer.choice}" for ${answer.questionId}; answer with 1-${options.length}]`);
         return;
       }
       pendingQuestions.delete(answer.questionId);

@@ -87,7 +87,11 @@ function main(): void {
       if (!line) continue;
       try {
         const msg = JSON.parse(line);
-        if (typeof msg.text === 'string' && msg.backlog === true) {
+        if (msg.superseded === true) {
+          console.error('chat: another `pnpm run chat` took over the terminal channel; its replies go there.');
+          socket.end();
+          process.exit(4);
+        } else if (typeof msg.text === 'string' && msg.backlog === true) {
           // Missed while no chat was open: print it, keep waiting for the reply.
           process.stdout.write(`[earlier] ${msg.text}\n`);
           missedCount++;
@@ -109,6 +113,7 @@ function main(): void {
   socket.on('close', () => {
     if (silenceTimer) clearTimeout(silenceTimer);
     if (hardTimer) clearTimeout(hardTimer);
+    if (!firstReplySeen && !catchUpOnly) console.error('chat: the host closed the connection before a reply arrived.');
     process.exit(firstReplySeen || catchUpOnly ? 0 : 3);
   });
 }
