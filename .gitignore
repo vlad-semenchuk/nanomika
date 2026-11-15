@@ -7,7 +7,6 @@ node_modules/
 dist/
 
 # Local data & auth
-store/
 data/
 logs/
 
@@ -24,6 +23,7 @@ groups/*
 *.keys.json
 .env
 .env*
+!.env.example
 
 # Temp files
 .tmp-*
@@ -35,13 +35,7 @@ groups/*
 .idea/
 .vscode/
 
-# Skills system (local per-installation state)
-.nanomika/
-
 # Local runtime locks
 .claude/scheduled_tasks.lock
-
-# Packaged container image tarballs (transferred to corp out-of-band, never committed)
-nanomika-agent-*.tar.gz
 
 agents-sdk-docs
