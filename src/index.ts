@@ -8,10 +8,8 @@ import path from 'path';
 
 import type { Server } from 'http';
 
-import { backfillContainerConfigs } from './backfill-container-configs.js';
 import { CREDENTIAL_PROXY_PORT, DATA_DIR } from './config.js';
 import { enforceStartupBackoff, resetCircuitBreaker } from './circuit-breaker.js';
-import { migrateGroupsToClaudeLocal } from './claude-md-compose.js';
 import { startCredentialProxy } from './credential-proxy.js';
 import { initDb } from './db/connection.js';
 import { runMigrations } from './db/migrations/index.js';
@@ -79,13 +77,6 @@ async function main(): Promise<void> {
   const db = initDb(dbPath);
   runMigrations(db);
   log.info('Central DB ready', { path: dbPath });
-
-  // 1b. Backfill container_configs from legacy container.json files.
-  // Idempotent — skips groups that already have a config row.
-  backfillContainerConfigs();
-
-  // 1c. One-time filesystem cutover — idempotent, no-op after first run.
-  migrateGroupsToClaudeLocal();
 
   // 2. Container runtime
   ensureContainerRuntimeRunning();
