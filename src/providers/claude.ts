@@ -1,18 +1,16 @@
 /**
- * Claude provider container config — only registered when the user has
- * configured a custom Anthropic-compatible endpoint via setup. Setup
- * appends `import './claude.js'` to providers/index.ts at that point;
- * standard installs hitting api.anthropic.com don't need this file
- * loaded.
+ * Claude provider container config. Not imported by default (see
+ * providers/index.ts).
  *
- * The real auth token never enters the container. Setup creates an
- * OneCLI generic secret (host-pattern = base URL hostname, header-name
- * = Authorization, value-format = "Bearer {value}") so the proxy
- * rewrites the Authorization header on the wire. The container only
- * needs:
+ * You normally don't need this: the host credential proxy
+ * (src/credential-proxy.ts) already forwards container traffic to
+ * ANTHROPIC_BASE_URL from .env and injects the real credentials.
+ *
+ * Importing this file makes the container call ANTHROPIC_BASE_URL directly,
+ * bypassing the proxy, with a placeholder token:
  *   - ANTHROPIC_BASE_URL — so the SDK knows where to call
- *   - ANTHROPIC_AUTH_TOKEN=placeholder — so the SDK adds an
- *     Authorization: Bearer header for OneCLI to overwrite
+ *   - ANTHROPIC_AUTH_TOKEN=placeholder — no real credential enters the container
+ * Only use it for an endpoint that needs no key (e.g. a local model server).
  */
 import { readEnvFile } from '../env.js';
 import { registerProviderContainerConfig } from './provider-container-registry.js';

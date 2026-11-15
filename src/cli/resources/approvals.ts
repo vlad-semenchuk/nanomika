@@ -38,7 +38,7 @@ registerResource({
       type: 'string',
       description: 'Platform message ID of the delivered card (for editing on expiry).',
     },
-    { name: 'expires_at', type: 'string', description: 'When this approval expires (OneCLI gateway TTL).' },
+    { name: 'expires_at', type: 'string', description: 'When this approval expires.' },
     {
       name: 'status',
       type: 'string',

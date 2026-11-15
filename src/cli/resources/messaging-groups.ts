@@ -12,8 +12,7 @@ registerResource({
     {
       name: 'channel_type',
       type: 'string',
-      description:
-        'Channel adapter type — matches the adapter registered by /add-<channel> (e.g. telegram, discord, slack, whatsapp).',
+      description: 'Channel adapter type — matches the name an adapter in src/channels/ registers under (e.g. cli).',
       required: true,
     },
     {

@@ -57,7 +57,7 @@ const activeContainers = new Map<string, { process: ChildProcess; containerName:
 /**
  * In-flight wake promises, keyed by session id. Deduplicates concurrent
  * `wakeContainer` calls while the first spawn is still mid-setup (async
- * buildContainerArgs, OneCLI gateway apply, etc.) — otherwise a second
+ * buildContainerArgs, etc.) — otherwise a second
  * wake in that window passes the `activeContainers.has` check and spawns
  * a duplicate container against the same session directory, producing
  * racy double-replies.
@@ -79,7 +79,7 @@ export function isContainerRunning(sessionId: string): boolean {
  * The container runs the v2 agent-runner which polls the session DB.
  *
  * Contract: never throws. Returns `true` on successful spawn, `false` on
- * transient spawn failure (e.g. OneCLI gateway unreachable). Callers don't
+ * transient spawn failure (e.g. container runtime unavailable). Callers don't
  * need to wrap — the inbound row stays pending and host-sweep retries on
  * its next tick. Callers that care (e.g. the router's typing indicator)
  * can branch on the boolean.
