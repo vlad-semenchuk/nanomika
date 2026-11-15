@@ -8,7 +8,9 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# Physical path (pwd -P): the host hashes process.cwd(), which resolves
+# symlinks, so the image name must be computed from the same path.
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 cd "$SCRIPT_DIR"
 
 # Derive the image name from the project root so two NanoMika installs on the
