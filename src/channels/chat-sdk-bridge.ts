@@ -55,7 +55,7 @@ export interface ChatSdkBridgeConfig {
   /**
    * Whether this platform uses threads as the primary conversation unit.
    * See `ChannelAdapter.supportsThreads`. Declared by the calling channel
-   * skill, not inferred, because some platforms (Discord) can be used either
+   * module, not inferred, because some platforms (Discord) can be used either
    * way and the default depends on installation style.
    */
   supportsThreads: boolean;

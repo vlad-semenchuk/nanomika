@@ -517,11 +517,6 @@ export function markContainerRunning(sessionId: string): void {
   updateSession(sessionId, { container_status: 'running', last_active: new Date().toISOString() });
 }
 
-/** Mark a container as idle for a session. */
-export function markContainerIdle(sessionId: string): void {
-  updateSession(sessionId, { container_status: 'idle' });
-}
-
 /** Mark a container as stopped for a session. */
 export function markContainerStopped(sessionId: string): void {
   updateSession(sessionId, { container_status: 'stopped' });

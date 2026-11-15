@@ -21,8 +21,8 @@ export const MOUNT_ALLOWLIST_PATH = path.join(HOME_DIR, '.config', 'nanomika', '
 export const GROUPS_DIR = path.resolve(PROJECT_ROOT, 'groups');
 export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
 
-// Per-checkout image tag so two installs on the same host don't share
-// `nanomika-agent:latest` and clobber each other on rebuild.
+// Per-checkout image tag so two installs on the same host don't share one
+// image and overwrite each other on rebuild.
 export const CONTAINER_IMAGE_BASE = process.env.CONTAINER_IMAGE_BASE || getContainerImageBase(PROJECT_ROOT);
 export const CONTAINER_IMAGE = process.env.CONTAINER_IMAGE || getDefaultContainerImage(PROJECT_ROOT);
 // Install slug — stamped onto every spawned container via --label so
@@ -32,7 +32,6 @@ export const CONTAINER_INSTALL_LABEL = `nanomika-install=${INSTALL_SLUG}`;
 // Port the host-side credential proxy listens on. Containers route outbound
 // API calls through this; secrets are injected here, never in the container.
 export const CREDENTIAL_PROXY_PORT = parseInt(process.env.CREDENTIAL_PROXY_PORT || '3001', 10);
-export const IDLE_TIMEOUT = parseInt(process.env.IDLE_TIMEOUT || '1800000', 10); // 30min default — how long to keep container alive after last result
 
 // Timezone for scheduled tasks, message formatting, etc.
 // Validates each candidate is a real IANA identifier before accepting.

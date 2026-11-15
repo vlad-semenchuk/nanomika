@@ -1,7 +1,6 @@
 /**
  * Per-checkout install identifiers. Lets two NanoMika installs coexist on
- * one host without clobbering each other's
- * shared `nanomika-agent:latest` docker image tag.
+ * one host without sharing (and overwriting) one docker image tag.
  *
  * Slug is sha1(projectRoot)[:8] — deterministic per checkout path, stable
  * across re-runs, unique enough across installs.

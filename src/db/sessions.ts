@@ -180,16 +180,8 @@ export function getPendingApproval(approvalId: string): PendingApproval | undefi
     | undefined;
 }
 
-export function updatePendingApprovalStatus(approvalId: string, status: PendingApproval['status']): void {
-  getDb().prepare('UPDATE pending_approvals SET status = ? WHERE approval_id = ?').run(status, approvalId);
-}
-
 export function deletePendingApproval(approvalId: string): void {
   getDb().prepare('DELETE FROM pending_approvals WHERE approval_id = ?').run(approvalId);
-}
-
-export function getPendingApprovalsByAction(action: string): PendingApproval[] {
-  return getDb().prepare('SELECT * FROM pending_approvals WHERE action = ?').all(action) as PendingApproval[];
 }
 
 /**

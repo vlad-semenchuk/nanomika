@@ -7,8 +7,7 @@
  *   - Uses heartbeat file mtime for liveness (never polls DB for it)
  *   - Never writes to outbound.db — preserves single-writer-per-file invariant
  *
- * Stuck / idle detection (replaces the old IDLE_TIMEOUT setTimeout + 10-min
- * heartbeat threshold):
+ * Stuck / idle detection:
  *
  *   If the container isn't running and there are 'processing' rows left over
  *   (e.g. it crashed mid-turn) → reset them to pending with backoff +

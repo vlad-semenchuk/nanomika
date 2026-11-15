@@ -79,20 +79,13 @@ describe('channel registry', () => {
   });
 
   it('should register and retrieve channel adapters', async () => {
-    const { registerChannelAdapter, getRegisteredChannelNames, getChannelContainerConfig } =
-      await import('./channel-registry.js');
+    const { registerChannelAdapter, getRegisteredChannelNames } = await import('./channel-registry.js');
 
     registerChannelAdapter('test-channel', {
       factory: () => createMockAdapter('test'),
-      containerConfig: {
-        env: { TEST_KEY: 'value' },
-      },
     });
 
     expect(getRegisteredChannelNames()).toContain('test-channel');
-    expect(getChannelContainerConfig('test-channel')).toEqual({
-      env: { TEST_KEY: 'value' },
-    });
   });
 
   it('should skip adapters that return null (missing credentials)', async () => {

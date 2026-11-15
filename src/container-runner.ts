@@ -311,7 +311,7 @@ function buildMounts(
     mounts.push(...validated);
   }
 
-  // Provider-contributed mounts (e.g. opencode-xdg)
+  // Provider-contributed mounts
   if (providerContribution.mounts) {
     mounts.push(...providerContribution.mounts);
   }
@@ -335,7 +335,7 @@ function syncSkillSymlinks(claudeDir: string, containerConfig: import('./contain
   const sharedSkillsDir = path.join(projectRoot, 'container', 'skills');
   let desired: string[];
   if (containerConfig.skills === 'all') {
-    // Recompute from shared dir — newly-added upstream skills appear automatically
+    // Recompute from shared dir — newly added skills appear automatically
     desired = fs.existsSync(sharedSkillsDir)
       ? fs.readdirSync(sharedSkillsDir).filter((e) => {
           try {
@@ -393,7 +393,7 @@ async function buildContainerArgs(
   // Everything NanoMika-specific is in container.json (read by runner at startup).
   args.push('-e', `TZ=${TIMEZONE}`);
 
-  // Provider-contributed env vars (e.g. XDG_DATA_HOME, OPENCODE_*, NO_PROXY).
+  // Provider-contributed env vars
   if (providerContribution.env) {
     for (const [key, value] of Object.entries(providerContribution.env)) {
       args.push('-e', `${key}=${value}`);
@@ -402,8 +402,8 @@ async function buildContainerArgs(
 
   // Credential proxy — containers route Anthropic API calls through the
   // host-side proxy (credential-proxy.ts), which injects the real key/token so
-  // secrets never enter the container. Slack auth runs host-side; Gmail reads
-  // its own mounted OAuth credentials.
+  // secrets never enter the container. Channel credentials (e.g. Slack) are
+  // used host-side only.
   args.push('-e', `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`);
   // Mirror the host's auth method with a placeholder value.
   //   API key mode: SDK sends x-api-key, proxy swaps in the real key.

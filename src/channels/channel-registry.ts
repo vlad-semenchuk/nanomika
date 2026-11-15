@@ -41,11 +41,6 @@ export function getRegisteredChannelNames(): string[] {
   return [...registry.keys()];
 }
 
-/** Get container config for a channel (used by container-runner for additional mounts/env). */
-export function getChannelContainerConfig(name: string): ChannelRegistration['containerConfig'] {
-  return registry.get(name)?.containerConfig;
-}
-
 /**
  * Instantiate and set up all registered channel adapters.
  * Skips adapters that return null (missing credentials).

@@ -5,8 +5,9 @@
  * send_message(to="agent-name") since agents and channels share the
  * unified destinations namespace.
  *
- * create_agent is admin-only. Non-admin containers never see this tool
- * (see mcp-tools/index.ts). The host re-checks permission on receive.
+ * create_agent is available to every agent. The host handles the request
+ * in src/modules/agent-to-agent/create-agent.ts; the new agent is reachable
+ * only from the agent that created it.
  */
 import { writeMessageOut } from '../db/messages-out.js';
 import { registerTools } from './server.js';
@@ -32,7 +33,7 @@ export const createAgent: McpToolDefinition = {
   tool: {
     name: 'create_agent',
     description:
-      'Create a long-lived companion sub-agent (research assistant, task manager, specialist) — the name becomes your destination for it. Admin-only. Fire-and-forget.',
+      'Create a long-lived companion sub-agent (research assistant, task manager, specialist) — the name becomes your destination for it. Fire-and-forget.',
     inputSchema: {
       type: 'object' as const,
       properties: {

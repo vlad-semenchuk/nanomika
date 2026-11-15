@@ -172,8 +172,4 @@ export type ChannelAdapterFactory = () => ChannelAdapter | Promise<ChannelAdapte
 /** Registration entry for a channel adapter. */
 export interface ChannelRegistration {
   factory: ChannelAdapterFactory;
-  containerConfig?: {
-    mounts?: Array<{ hostPath: string; containerPath: string; readonly: boolean }>;
-    env?: Record<string, string>;
-  };
 }
