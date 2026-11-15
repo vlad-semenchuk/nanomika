@@ -11,7 +11,7 @@ import type { Server } from 'http';
 import { CONTAINER_IMAGE, CREDENTIAL_PROXY_PORT, DATA_DIR } from './config.js';
 import { bootstrapFirstAgent } from './bootstrap.js';
 import { enforceStartupBackoff, resetCircuitBreaker } from './circuit-breaker.js';
-import { startCredentialProxy } from './credential-proxy.js';
+import { ensureCredentialsConfigured, startCredentialProxy } from './credential-proxy.js';
 import { initDb } from './db/connection.js';
 import { runMigrations } from './db/migrations/index.js';
 import {
@@ -75,7 +75,13 @@ let credentialProxyServer: Server | undefined;
 async function main(): Promise<void> {
   log.info('NanoMika starting');
 
-  // 0. Circuit breaker — backoff on rapid restarts
+  // 0. Preflight: fail fast on missing config before the restart backoff, so
+  // fixing one thing at a time never waits on the circuit breaker.
+  ensureCredentialsConfigured();
+  ensureContainerRuntimeRunning();
+  ensureAgentImagePresent(CONTAINER_IMAGE);
+
+  // 0b. Circuit breaker — backoff on rapid restarts
   await enforceStartupBackoff();
 
   // 1. Init central DB
@@ -88,9 +94,7 @@ async function main(): Promise<void> {
   // when the DB has no agent groups. No-op afterwards.
   bootstrapFirstAgent();
 
-  // 2. Container runtime
-  ensureContainerRuntimeRunning();
-  ensureAgentImagePresent(CONTAINER_IMAGE);
+  // 2. Container runtime: reap this install's orphans from a previous run
   cleanupOrphans();
 
   // 2b. Credential proxy — containers route Anthropic API calls through this

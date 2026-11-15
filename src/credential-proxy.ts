@@ -113,3 +113,20 @@ export function detectAuthMode(): AuthMode {
   const secrets = readEnvFile(['ANTHROPIC_API_KEY']);
   return secrets.ANTHROPIC_API_KEY ? 'api-key' : 'oauth';
 }
+
+/** Keys the proxy accepts as the credential; at least one must be in .env. */
+export const CREDENTIAL_KEYS = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN'] as const;
+
+/**
+ * Fail fast at startup when .env holds no credential, instead of failing on
+ * the first agent call. Reads .env only, like the proxy itself: a key that is
+ * only exported in the shell is not used.
+ */
+export function ensureCredentialsConfigured(): void {
+  const secrets = readEnvFile([...CREDENTIAL_KEYS]);
+  if (CREDENTIAL_KEYS.some((k) => secrets[k])) return;
+  console.error('\nFATAL: no Anthropic credential found in .env.');
+  console.error('Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN in .env (see .env.example).');
+  console.error('Keys exported in the shell are ignored; the credential proxy reads .env only.\n');
+  throw new Error('No Anthropic credential in .env: set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN');
+}

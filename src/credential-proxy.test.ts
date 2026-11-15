@@ -11,7 +11,7 @@ vi.mock('./log.js', () => ({
   log: { info: vi.fn(), error: vi.fn(), debug: vi.fn(), warn: vi.fn() },
 }));
 
-import { startCredentialProxy } from './credential-proxy.js';
+import { ensureCredentialsConfigured, startCredentialProxy } from './credential-proxy.js';
 
 function makeRequest(
   port: number,
@@ -181,5 +181,24 @@ describe('credential-proxy', () => {
 
     expect(res.statusCode).toBe(502);
     expect(res.body).toBe('Bad Gateway');
+  });
+});
+
+describe('ensureCredentialsConfigured', () => {
+  beforeEach(() => {
+    for (const k of Object.keys(mockEnv)) delete mockEnv[k];
+  });
+
+  it.each(['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN'])('passes when %s is set', (key) => {
+    mockEnv[key] = 'x';
+    expect(() => ensureCredentialsConfigured()).not.toThrow();
+  });
+
+  it('throws naming the keys when .env has no credential', () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockEnv.ANTHROPIC_BASE_URL = 'http://localhost:1234';
+    expect(() => ensureCredentialsConfigured()).toThrow('ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN');
+    expect(errSpy.mock.calls.flat().join('\n')).toContain('.env');
+    errSpy.mockRestore();
   });
 });
