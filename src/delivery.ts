@@ -9,7 +9,13 @@
  */
 import type Database from 'better-sqlite3';
 
-import { getRunningSessions, getActiveSessions, createPendingQuestion } from './db/sessions.js';
+import {
+  createPendingQuestion,
+  getActiveSessions,
+  getAskQuestionRender,
+  getPendingQuestion,
+  getRunningSessions,
+} from './db/sessions.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { getDb, hasTable } from './db/connection.js';
 import { getMessagingGroupByPlatform } from './db/messaging-groups.js';
@@ -314,6 +320,14 @@ async function deliverMessage(
   // Guarded: without the interactive module, `pending_questions` doesn't
   // exist and we skip persistence — the card still delivers to the user,
   // but the response path has nowhere to land and will log unclaimed.
+  // An agent's question must not reuse the id of a pending approval: its own
+  // options would replace the approval's and could turn any answer into "approve".
+  if (content.type === 'ask_question' && content.questionId && !getPendingQuestion(String(content.questionId))) {
+    if (getAskQuestionRender(String(content.questionId))) {
+      throw new Error(`ask_question id collides with a pending approval: ${String(content.questionId)}`);
+    }
+  }
+
   if (content.type === 'ask_question' && content.questionId && hasTable(getDb(), 'pending_questions')) {
     const title = content.title as string | undefined;
     const rawOptions = content.options as unknown;
