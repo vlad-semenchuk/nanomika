@@ -1,6 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import fs from 'fs';
+import net from 'net';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+vi.mock('../config.js', async () => {
+  const actual = await vi.importActual('../config.js');
+  return { ...actual, DATA_DIR: '/tmp/nanomika-test-cli' };
+});
+
+import type { ChannelSetup } from './adapter.js';
 import { normalizeOptions } from './ask-question.js';
+import { getChannelAdapter, initChannelAdapters, teardownChannelAdapters } from './channel-registry.js';
 import { formatQuestionText, parseAnswerCommand, resolveOption } from './cli.js';
 
 const options = normalizeOptions([
@@ -37,5 +46,67 @@ describe('CLI question cards', () => {
     expect(resolveOption(options, 'REJECT')).toBe('reject');
     expect(resolveOption(options, '3')).toBeNull();
     expect(resolveOption(options, 'maybe')).toBeNull();
+  });
+});
+
+describe('CLI backlog', () => {
+  const DIR = '/tmp/nanomika-test-cli';
+  const setup: ChannelSetup = { onInbound: vi.fn(), onInboundEvent: vi.fn(), onMetadata: vi.fn(), onAction: vi.fn() };
+
+  beforeAll(async () => {
+    fs.mkdirSync(DIR, { recursive: true });
+    await initChannelAdapters(() => setup);
+  });
+
+  afterAll(async () => {
+    await teardownChannelAdapters();
+    fs.rmSync(DIR, { recursive: true, force: true });
+  });
+
+  /** Connect, send one line, collect the JSON lines received within `ms`. */
+  function exchange(line: object, ms = 150): Promise<Array<Record<string, unknown>>> {
+    return new Promise((resolve, reject) => {
+      const socket = net.connect(`${DIR}/cli.sock`);
+      let buffer = '';
+      socket.on('error', reject);
+      socket.on('data', (chunk) => (buffer += chunk.toString('utf8')));
+      socket.on('connect', () => {
+        socket.write(JSON.stringify(line) + '\n');
+        setTimeout(() => {
+          socket.end();
+          resolve(
+            buffer
+              .split('\n')
+              .filter(Boolean)
+              .map((l) => JSON.parse(l)),
+          );
+        }, ms);
+      });
+    });
+  }
+
+  it('keeps messages delivered with no client and hands them to the next one, once', async () => {
+    const adapter = getChannelAdapter('cli')!;
+    await adapter.deliver('local', null, { kind: 'chat', content: { text: 'late reply' } });
+    await adapter.deliver('local', null, {
+      kind: 'chat',
+      content: { type: 'ask_question', questionId: 'q-1', title: 'Approve?', question: '', options: ['Yes', 'No'] },
+    });
+
+    const first = await exchange({ backlog: true });
+    expect(first).toHaveLength(2);
+    expect(first[0]).toEqual({ text: 'late reply', backlog: true });
+    expect(first[1].text).toContain('/answer q-1');
+    expect(setup.onInbound).not.toHaveBeenCalled();
+
+    // Let the server see the first client close before the next one connects.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(await exchange({ backlog: true })).toEqual([]);
+  });
+
+  it('answers a backlogged question by number', async () => {
+    const lines = await exchange({ text: '/answer q-1 2' });
+    expect(setup.onAction).toHaveBeenCalledWith('q-1', 'No', 'cli:local');
+    expect(lines.map((l) => l.text)).toEqual(['[answered q-1: No]']);
   });
 });

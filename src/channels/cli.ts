@@ -15,8 +15,10 @@
  *                             "platformId": "discord:@me:149...",
  *                             "threadId": null} }         # route to a specific mg
  *     { "text": "...", "to": {...}, "reply_to": {...} }   # + redirect replies
+ *     { "backlog": true }                                 # only print what was missed
  *   Server → client:
  *     { "text": "agent reply" }
+ *     { "text": "...", "backlog": true }                  # sent while no terminal was connected
  *
  * Questions and approval requests (`ask_question` cards) are printed as text
  * with numbered options. Answer one with `/answer <questionId> <number|option>`;
@@ -34,9 +36,10 @@
  * route-opcode connections (`to` set) are one-shot and do NOT evict an
  * active chat client.
  *
- * deliver() silently no-ops when no client is connected. The outbound row
- * is already in outbound.db, so the message isn't lost — it just doesn't
- * reach this run's terminal. Reconnect to see subsequent replies.
+ * Messages delivered while no client is connected (a late reply, a scheduled
+ * task's output, an approval card) are kept in a bounded in-memory backlog and
+ * written, flagged `backlog: true`, to the next chat client that connects.
+ * The backlog does not survive a host restart.
  */
 import fs from 'fs';
 import net from 'net';
@@ -49,6 +52,7 @@ import { normalizeOptions, type NormalizedOption, type RawOption } from './ask-q
 import { registerChannelAdapter } from './channel-registry.js';
 
 const PLATFORM_ID = 'local';
+const MAX_BACKLOG = 100;
 
 function socketPath(): string {
   return path.join(DATA_DIR, 'cli.sock');
@@ -60,6 +64,8 @@ function createAdapter(): ChannelAdapter {
   // Options of questions printed to the terminal, so `/answer <id> 2` can map
   // a number or label back to the option value. In memory only.
   const pendingQuestions = new Map<string, NormalizedOption[]>();
+  // Text delivered while no terminal was connected, oldest first.
+  const backlog: string[] = [];
 
   const adapter: ChannelAdapter = {
     name: 'cli',
@@ -127,16 +133,16 @@ function createAdapter(): ChannelAdapter {
 
     async deliver(platformId, _threadId, message: OutboundMessage): Promise<string | undefined> {
       if (platformId !== PLATFORM_ID) return undefined;
-      if (!client) {
-        // No live terminal — outbound row is already persisted, so this
-        // isn't a data loss. User will see it on the next connect cycle
-        // (or never, if we don't add scroll-back). Not worth throwing.
-        return undefined;
-      }
       const question = asQuestion(message);
       if (question) pendingQuestions.set(question.questionId, question.options);
       const text = question ? formatQuestionText(question) : extractText(message);
       if (text === null) return undefined;
+      if (!client) {
+        // No live terminal: keep it for the next client that connects.
+        backlog.push(text);
+        if (backlog.length > MAX_BACKLOG) backlog.shift();
+        return undefined;
+      }
       try {
         client.write(JSON.stringify({ text }) + '\n');
       } catch (err) {
@@ -165,6 +171,13 @@ function createAdapter(): ChannelAdapter {
       }
       client = socket;
       log.info('CLI client connected');
+      for (const text of backlog.splice(0)) {
+        try {
+          socket.write(JSON.stringify({ text, backlog: true }) + '\n');
+        } catch (err) {
+          log.warn('Failed to write backlog to CLI client', { err });
+        }
+      }
     };
 
     let buffer = '';
@@ -191,6 +204,7 @@ function createAdapter(): ChannelAdapter {
 
   async function handleLine(line: string, config: ChannelSetup, claimChatSlot: () => void): Promise<void> {
     let payload: {
+      backlog?: unknown;
       text?: unknown;
       to?: unknown;
       reply_to?: unknown;
@@ -199,8 +213,13 @@ function createAdapter(): ChannelAdapter {
     };
     try {
       payload = JSON.parse(line);
-    } catch (err) {
+    } catch {
       log.warn('CLI: ignoring non-JSON line from client', { line });
+      return;
+    }
+    if (payload.backlog === true) {
+      // Catch-up only: claiming the slot flushes the backlog to this client.
+      claimChatSlot();
       return;
     }
     if (typeof payload.text !== 'string' || payload.text.length === 0) return;
