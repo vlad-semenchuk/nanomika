@@ -18,6 +18,11 @@
  *   Server → client:
  *     { "text": "agent reply" }
  *
+ * Questions and approval requests (`ask_question` cards) are printed as text
+ * with numbered options. Answer one with `/answer <questionId> <number|option>`;
+ * the adapter turns that into an action from `cli:local` instead of routing
+ * it to the agent.
+ *
  * The `to` and `reply_to` addressing is how admin transports (the bootstrap
  * script) inject messages targeting any wired channel. `reply_to` is a
  * router-layer concept — agents cannot set it; it is carried only on
@@ -40,6 +45,7 @@ import path from 'path';
 import { DATA_DIR } from '../config.js';
 import { log } from '../log.js';
 import type { ChannelAdapter, ChannelSetup, DeliveryAddress, InboundEvent, OutboundMessage } from './adapter.js';
+import { normalizeOptions, type NormalizedOption, type RawOption } from './ask-question.js';
 import { registerChannelAdapter } from './channel-registry.js';
 
 const PLATFORM_ID = 'local';
@@ -51,6 +57,9 @@ function socketPath(): string {
 function createAdapter(): ChannelAdapter {
   let server: net.Server | null = null;
   let client: net.Socket | null = null;
+  // Options of questions printed to the terminal, so `/answer <id> 2` can map
+  // a number or label back to the option value. In memory only.
+  const pendingQuestions = new Map<string, NormalizedOption[]>();
 
   const adapter: ChannelAdapter = {
     name: 'cli',
@@ -124,7 +133,9 @@ function createAdapter(): ChannelAdapter {
         // (or never, if we don't add scroll-back). Not worth throwing.
         return undefined;
       }
-      const text = extractText(message);
+      const question = asQuestion(message);
+      if (question) pendingQuestions.set(question.questionId, question.options);
+      const text = question ? formatQuestionText(question) : extractText(message);
       if (text === null) return undefined;
       try {
         client.write(JSON.stringify({ text }) + '\n');
@@ -228,6 +239,27 @@ function createAdapter(): ChannelAdapter {
     // Plain chat — claim the slot (evicting any prior client) and route via
     // the standard onInbound path (adapter injects its own channelType).
     claimChatSlot();
+
+    const answer = parseAnswerCommand(payload.text);
+    if (answer) {
+      const options = pendingQuestions.get(answer.questionId);
+      // Options unknown (e.g. the host restarted since the question was
+      // printed): accept an option name, never a bare number.
+      const value = options
+        ? resolveOption(options, answer.choice)
+        : /^\d+$/.test(answer.choice)
+          ? null
+          : answer.choice.toLowerCase();
+      if (value === null) {
+        reply(`[unknown option "${answer.choice}" for ${answer.questionId}; answer with an option name]`);
+        return;
+      }
+      pendingQuestions.delete(answer.questionId);
+      config.onAction(answer.questionId, value, `cli:${PLATFORM_ID}`);
+      reply(`[answered ${answer.questionId}: ${value}]`);
+      return;
+    }
+
     try {
       await config.onInbound(PLATFORM_ID, null, {
         id: `cli-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -241,6 +273,14 @@ function createAdapter(): ChannelAdapter {
       });
     } catch (err) {
       log.error('CLI: onInbound threw', { err });
+    }
+  }
+
+  function reply(text: string): void {
+    try {
+      client?.write(JSON.stringify({ text }) + '\n');
+    } catch (err) {
+      log.warn('Failed to write to CLI client', { err });
     }
   }
 
@@ -262,6 +302,51 @@ function createAdapter(): ChannelAdapter {
   }
 
   return adapter;
+}
+
+interface CliQuestion {
+  questionId: string;
+  title: string;
+  question: string;
+  options: NormalizedOption[];
+}
+
+function asQuestion(message: OutboundMessage): CliQuestion | null {
+  const c = message.content as Record<string, unknown> | undefined;
+  if (!c || typeof c !== 'object' || c.type !== 'ask_question') return null;
+  if (typeof c.questionId !== 'string' || !Array.isArray(c.options)) return null;
+  return {
+    questionId: c.questionId,
+    title: typeof c.title === 'string' ? c.title : 'Question',
+    question: typeof c.question === 'string' ? c.question : '',
+    options: normalizeOptions(c.options as RawOption[]),
+  };
+}
+
+/** Render an ask_question card as plain text for the terminal. */
+export function formatQuestionText(q: CliQuestion): string {
+  const lines = [`❓ ${q.title}`];
+  if (q.question) lines.push(q.question);
+  q.options.forEach((o, i) => lines.push(`  ${i + 1}. ${o.label}`));
+  lines.push(`Answer with: pnpm run chat /answer ${q.questionId} <1-${q.options.length}>`);
+  return lines.join('\n');
+}
+
+/** Parse `/answer <questionId> <choice>`; null for any other text. */
+export function parseAnswerCommand(text: string): { questionId: string; choice: string } | null {
+  const m = text.trim().match(/^\/answer\s+(\S+)\s+(.+)$/);
+  return m ? { questionId: m[1], choice: m[2].trim() } : null;
+}
+
+/** Map a 1-based number, a label or a value to the option value. */
+export function resolveOption(options: NormalizedOption[], choice: string): string | null {
+  if (/^\d+$/.test(choice)) {
+    const o = options[Number(choice) - 1];
+    return o ? o.value : null;
+  }
+  const lc = choice.toLowerCase();
+  const o = options.find((x) => x.value.toLowerCase() === lc || x.label.toLowerCase() === lc);
+  return o ? o.value : null;
 }
 
 function extractText(message: OutboundMessage): string | null {
