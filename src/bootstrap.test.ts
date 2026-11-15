@@ -102,4 +102,14 @@ describe('bootstrapFirstAgent', () => {
     bootstrapFirstAgent('Andy');
     expect(fs.existsSync(outside)).toBe(false);
   });
+
+  it('leaves no half-made agent when the group folder cannot be created', () => {
+    fs.writeFileSync(path.join(TEST_DIR, 'groups'), 'not a directory');
+    expect(() => bootstrapFirstAgent('Andy')).toThrow();
+    expect(count('agent_groups')).toBe(0);
+
+    fs.rmSync(path.join(TEST_DIR, 'groups'));
+    expect(bootstrapFirstAgent('Andy')).toBe(true);
+    expect(count('messaging_group_agents')).toBe(1);
+  });
 });

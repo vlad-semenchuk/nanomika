@@ -15,8 +15,3 @@ export function getInstallSlug(projectRoot: string = process.cwd()): string {
 export function getContainerImageBase(projectRoot?: string): string {
   return `nanomika-agent-v2-${getInstallSlug(projectRoot)}`;
 }
-
-/** Default full container image reference with `:latest` tag. */
-export function getDefaultContainerImage(projectRoot?: string): string {
-  return `${getContainerImageBase(projectRoot)}:latest`;
-}

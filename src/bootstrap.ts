@@ -16,6 +16,7 @@
  */
 import { ASSISTANT_NAME } from './config.js';
 import { createAgentGroup, getAgentGroupByFolder, getAllAgentGroups } from './db/agent-groups.js';
+import { getDb } from './db/connection.js';
 import {
   createMessagingGroup,
   createMessagingGroupAgent,
@@ -51,7 +52,12 @@ function starterInstructions(name: string): string {
  */
 export function bootstrapFirstAgent(agentName: string = ASSISTANT_NAME): boolean {
   if (getAllAgentGroups().length > 0) return false;
+  // One transaction: if creating the group folder fails, no half-made agent
+  // is left behind to stop the next start from finishing the setup.
+  return getDb().transaction(() => createFirstAgent(agentName))();
+}
 
+function createFirstAgent(agentName: string): boolean {
   const now = new Date().toISOString();
 
   upsertUser({ id: CLI_USER_ID, kind: CLI_CHANNEL, display_name: 'Local user', created_at: now });

@@ -2,7 +2,7 @@ import os from 'os';
 import path from 'path';
 
 import { readEnvFile } from './env.js';
-import { getContainerImageBase, getDefaultContainerImage, getInstallSlug } from './install-slug.js';
+import { getContainerImageBase, getInstallSlug } from './install-slug.js';
 import { isValidTimezone } from './timezone.js';
 
 // Read config values from .env (falls back to process.env).
@@ -24,7 +24,7 @@ export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
 // Per-checkout image tag so two installs on the same host don't share one
 // image and overwrite each other on rebuild.
 export const CONTAINER_IMAGE_BASE = process.env.CONTAINER_IMAGE_BASE || getContainerImageBase(PROJECT_ROOT);
-export const CONTAINER_IMAGE = process.env.CONTAINER_IMAGE || getDefaultContainerImage(PROJECT_ROOT);
+export const CONTAINER_IMAGE = process.env.CONTAINER_IMAGE || `${CONTAINER_IMAGE_BASE}:latest`;
 // Install slug — stamped onto every spawned container via --label so
 // cleanupOrphans only reaps containers from this install, not peers.
 const INSTALL_SLUG = getInstallSlug(PROJECT_ROOT);
