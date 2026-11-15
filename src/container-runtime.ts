@@ -87,6 +87,25 @@ export function ensureContainerRuntimeRunning(): void {
 }
 
 /**
+ * Ensure the agent image exists locally. The host never builds it on its own:
+ * a missing image stops startup with a message naming the build command.
+ */
+export function ensureAgentImagePresent(image: string): void {
+  if (!/^[\w./:@-]+$/.test(image)) {
+    throw new Error(`Invalid container image name: ${image}`);
+  }
+  try {
+    execSync(`${CONTAINER_RUNTIME_BIN} image inspect ${image}`, { stdio: 'pipe', timeout: 10000 });
+  } catch (err) {
+    log.error('Agent image not found', { image, err });
+    console.error(`\nFATAL: agent image ${image} not found.`);
+    console.error('Build it once with:  pnpm run build:image');
+    console.error('Then start NanoMika again.\n');
+    throw new Error(`Agent image ${image} not found; run \`pnpm run build:image\``, { cause: err });
+  }
+}
+
+/**
  * Kill orphaned NanoMika containers from THIS install's previous runs.
  *
  * Scoped by label `nanomika-install=<slug>` so a crash-looping peer install

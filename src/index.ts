@@ -8,13 +8,18 @@ import path from 'path';
 
 import type { Server } from 'http';
 
-import { CREDENTIAL_PROXY_PORT, DATA_DIR } from './config.js';
+import { CONTAINER_IMAGE, CREDENTIAL_PROXY_PORT, DATA_DIR } from './config.js';
 import { bootstrapFirstAgent } from './bootstrap.js';
 import { enforceStartupBackoff, resetCircuitBreaker } from './circuit-breaker.js';
 import { startCredentialProxy } from './credential-proxy.js';
 import { initDb } from './db/connection.js';
 import { runMigrations } from './db/migrations/index.js';
-import { ensureContainerRuntimeRunning, cleanupOrphans, PROXY_BIND_HOST } from './container-runtime.js';
+import {
+  ensureContainerRuntimeRunning,
+  ensureAgentImagePresent,
+  cleanupOrphans,
+  PROXY_BIND_HOST,
+} from './container-runtime.js';
 import { startActiveDeliveryPoll, startSweepDeliveryPoll, setDeliveryAdapter, stopDeliveryPolls } from './delivery.js';
 import { startHostSweep, stopHostSweep } from './host-sweep.js';
 import { routeInbound } from './router.js';
@@ -85,6 +90,7 @@ async function main(): Promise<void> {
 
   // 2. Container runtime
   ensureContainerRuntimeRunning();
+  ensureAgentImagePresent(CONTAINER_IMAGE);
   cleanupOrphans();
 
   // 2b. Credential proxy — containers route Anthropic API calls through this
