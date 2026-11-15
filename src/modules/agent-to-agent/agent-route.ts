@@ -27,7 +27,13 @@ import { getInboundSourceSessionId, getMostRecentPeerSourceSessionId } from '../
 import { getSession } from '../../db/sessions.js';
 import { wakeContainer } from '../../container-runner.js';
 import { log } from '../../log.js';
-import { openInboundDb, resolveSession, sessionDir, writeSessionMessage } from '../../session-manager.js';
+import {
+  openInboundDb,
+  readOutboxFiles,
+  resolveSession,
+  safeSessionPath,
+  writeSessionMessage,
+} from '../../session-manager.js';
 import type { Session } from '../../types.js';
 import { hasDestination } from './db/agent-destinations.js';
 
@@ -47,9 +53,9 @@ export interface ForwardedAttachment {
  * as relative to `/workspace/`, matching how channel-inbound attachments
  * are surfaced today.
  *
- * Missing source files and unsafe (path-traversal) filenames are skipped
- * with a warning rather than failing the whole route — a bad filename
- * reference shouldn't kill the accompanying text.
+ * Missing source files, unsafe names and symlinks are skipped with a
+ * warning rather than failing the whole route — a bad filename reference
+ * shouldn't kill the accompanying text.
  */
 export function forwardAttachedFiles(
   source: { agentGroupId: string; sessionId: string; messageId: string; filenames: string[] },
@@ -57,37 +63,32 @@ export function forwardAttachedFiles(
 ): ForwardedAttachment[] {
   if (source.filenames.length === 0) return [];
 
-  const sourceDir = path.join(sessionDir(source.agentGroupId, source.sessionId), 'outbox', source.messageId);
-  if (!fs.existsSync(sourceDir)) {
-    log.warn('agent-route: source outbox dir missing, no files forwarded', {
-      sourceMsgId: source.messageId,
-      sourceDir,
-    });
+  // Same checks as channel delivery: safe names, no symlinks under the session folder.
+  const files = readOutboxFiles(source.agentGroupId, source.sessionId, source.messageId, source.filenames);
+  if (!files) {
+    log.warn('agent-route: no readable files in source outbox, none forwarded', { sourceMsgId: source.messageId });
     return [];
   }
 
-  const targetInboxDir = path.join(sessionDir(target.agentGroupId, target.sessionId), 'inbox', target.messageId);
-  fs.mkdirSync(targetInboxDir, { recursive: true });
+  const targetInboxDir = safeSessionPath(target.agentGroupId, target.sessionId, ['inbox', target.messageId], true);
+  if (!targetInboxDir) {
+    log.warn('agent-route: unsafe target inbox, no files forwarded', { targetMsgId: target.messageId });
+    return [];
+  }
 
   const attachments: ForwardedAttachment[] = [];
-  for (const filename of source.filenames) {
-    if (!isSafeAttachmentName(filename)) {
-      log.warn('agent-route: rejecting unsafe attachment filename (path traversal attempt?)', {
-        sourceMsgId: source.messageId,
+  for (const { filename, data } of files) {
+    try {
+      // wx: never follow or overwrite something already at the target path.
+      fs.writeFileSync(path.join(targetInboxDir, filename), data, { flag: 'wx' });
+    } catch (err) {
+      log.warn('agent-route: could not write forwarded file, skipped', {
+        targetMsgId: target.messageId,
         filename,
+        err,
       });
       continue;
     }
-    const src = path.join(sourceDir, filename);
-    if (!fs.existsSync(src)) {
-      log.warn('agent-route: referenced file missing in source outbox, skipped', {
-        sourceMsgId: source.messageId,
-        filename,
-      });
-      continue;
-    }
-    const dst = path.join(targetInboxDir, filename);
-    fs.copyFileSync(src, dst);
     attachments.push({
       name: filename,
       filename,
