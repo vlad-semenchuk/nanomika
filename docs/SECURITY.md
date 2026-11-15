@@ -115,6 +115,7 @@ Files an agent sends, to a chat or to another agent, are read from the session's
 
 - Containers have unrestricted outbound network access. An agent that reads untrusted content can be tricked into sending data it can see to a third party. Mount only what the agent needs.
 - The credential proxy listens on port 3001 (`CREDENTIAL_PROXY_PORT`), as described above.
+- The Telegram adapter uses long polling: it makes outbound requests to `api.telegram.org` and opens no listening port. The bot token is read from `.env` by the host only (`readEnvFile`); it is not put into `process.env` or passed to a container.
 - The Slack adapter in Socket Mode opens no listening port. In webhook mode (no `SLACK_APP_TOKEN`) the host listens on `0.0.0.0:3000` (`WEBHOOK_PORT`), and the Slack adapter uses `SLACK_SIGNING_SECRET` to verify incoming requests.
 
 ## Not protected

@@ -2,6 +2,12 @@
 
 All notable changes to NanoMika are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Telegram channel.** `src/channels/telegram.ts` (`@chat-adapter/telegram` 4.27.0, long polling, no listening port) starts when `TELEGRAM_BOT_TOKEN` is set in `.env`. A new chat is connected through the usual approval card. Group commands like `/clear@yourbot` reach the command gate as `/clear`.
+
 ## [3.0.0] - standalone core
 
 Rebuild of the project as a small, standalone core that you clone, run and extend with your own channel. History before this point is in git; tag `v2.0.70` marks the last version before the rebuild.
