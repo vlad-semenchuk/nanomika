@@ -52,7 +52,3 @@ export function registerProviderContainerConfig(name: string, fn: ProviderContai
 export function getProviderContainerConfig(name: string): ProviderContainerConfigFn | undefined {
   return registry.get(name);
 }
-
-export function listProviderContainerConfigNames(): string[] {
-  return [...registry.keys()];
-}

@@ -19,10 +19,6 @@ import { log } from './log.js';
 
 export type AuthMode = 'api-key' | 'oauth';
 
-export interface ProxyConfig {
-  authMode: AuthMode;
-}
-
 export function startCredentialProxy(port: number, host = '127.0.0.1'): Promise<Server> {
   const secrets = readEnvFile([
     'ANTHROPIC_API_KEY',

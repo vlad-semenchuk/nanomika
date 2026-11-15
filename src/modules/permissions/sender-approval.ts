@@ -147,9 +147,4 @@ export async function requestSenderApproval(input: RequestSenderApprovalInput): 
   }
 }
 
-/**
- * Option value the admin clicked that means "allow" — shared with the
- * response handler so the two sides can't drift.
- */
-export const APPROVE_VALUE = 'approve';
 export const REJECT_VALUE = 'reject';

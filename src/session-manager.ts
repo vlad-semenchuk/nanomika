@@ -394,27 +394,6 @@ export function writeOutboundDirect(
   }
 }
 
-/** Write a system response to a session's inbound.db so the container's findQuestionResponse() picks it up. */
-export function writeSystemResponse(
-  agentGroupId: string,
-  sessionId: string,
-  requestId: string,
-  status: string,
-  result: Record<string, unknown>,
-): void {
-  writeSessionMessage(agentGroupId, sessionId, {
-    id: `sys-resp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    kind: 'system',
-    timestamp: new Date().toISOString(),
-    content: JSON.stringify({
-      type: 'question_response',
-      questionId: requestId,
-      status,
-      result,
-    }),
-  });
-}
-
 /**
  * Load outbox attachments for a delivered message.
  *
