@@ -8,9 +8,8 @@
  *   - A response handler that claims pending_approvals rows and dispatches
  *     to whatever module registered for the row's `action` string.
  *
- * Self-mod flows (install_packages, add_mcp_server) moved out to
- * `src/modules/self-mod/` in PR #7 — they now register delivery actions
- * + approval handlers via this module's public API.
+ * Current client: `src/cli/dispatch.ts` (approval-gated `ncl` commands,
+ * action `cli_command`).
  */
 import { registerResponseHandler } from '../../response-registry.js';
 import { handleApprovalsResponse } from './response-handler.js';

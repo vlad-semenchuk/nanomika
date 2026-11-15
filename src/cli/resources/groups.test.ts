@@ -30,6 +30,7 @@ vi.mock('../../config.js', async () => {
 const TEST_DIR = '/tmp/nanomika-test-cli-groups';
 
 import { initTestDb, closeDb, runMigrations, createAgentGroup, getDb } from '../../db/index.js';
+import { ensureContainerConfig } from '../../db/container-configs.js';
 import { createSession } from '../../db/sessions.js';
 import { dispatch } from '../dispatch.js';
 // Side-effect import: registers the `groups-*` commands (including delete).
@@ -216,5 +217,47 @@ describe('groups CLI delete cascades dependent rows (#2525)', () => {
     expect(resp.ok).toBe(false);
     expect((resp as { ok: false; error: { code: string; message: string } }).error.code).toBe('handler-error');
     expect((resp as { ok: false; error: { code: string; message: string } }).error.message).toMatch(/not found/i);
+  });
+});
+
+describe('groups CLI input validation', () => {
+  beforeEach(() => {
+    if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true });
+    fs.mkdirSync(TEST_DIR, { recursive: true });
+    runMigrations(initTestDb());
+  });
+
+  afterEach(() => {
+    closeDb();
+    if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true });
+  });
+
+  const run = (command: string, args: Record<string, unknown>) =>
+    dispatch({ id: 'r', command, args }, { caller: 'host' });
+
+  it('refuses a group folder that is not a plain name', async () => {
+    for (const folder of ['..', '/Users/me', 'a/b', '.hidden', 'global']) {
+      const resp = await run('groups-create', { name: 'x', folder });
+      expect(resp.ok, folder).toBe(false);
+    }
+    expect((await run('groups-create', { name: 'x', folder: 'research_1' })).ok).toBe(true);
+  });
+
+  it('refuses package names with shell or Dockerfile syntax', async () => {
+    createAgentGroup({ id: 'ag-1', name: 'A', folder: 'a', agent_provider: null, created_at: now() });
+    ensureContainerConfig('ag-1');
+    for (const apt of ['curl; rm -rf /', 'x\nCOPY . /loot', '$(id)', '-oDebug::pkgProblemResolver=1']) {
+      expect((await run('groups-config-add-package', { id: 'ag-1', apt })).ok, apt).toBe(false);
+    }
+    expect((await run('groups-config-add-package', { id: 'ag-1', npm: 'x && curl evil' })).ok).toBe(false);
+    expect((await run('groups-config-add-package', { id: 'ag-1', apt: 'ffmpeg' })).ok).toBe(true);
+    expect((await run('groups-config-add-package', { id: 'ag-1', npm: '@scope/pkg@1.2.3' })).ok).toBe(true);
+  });
+
+  it('refuses an unknown provider', async () => {
+    createAgentGroup({ id: 'ag-1', name: 'A', folder: 'a', agent_provider: null, created_at: now() });
+    ensureContainerConfig('ag-1');
+    expect((await run('groups-config-update', { id: 'ag-1', provider: 'opencode' })).ok).toBe(false);
+    expect((await run('groups-config-update', { id: 'ag-1', provider: 'claude' })).ok).toBe(true);
   });
 });

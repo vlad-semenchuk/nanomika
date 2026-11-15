@@ -1,22 +1,17 @@
 /**
- * scripts/q.ts — sqlite3 CLI replacement for skill SQL invocations.
+ * scripts/q.ts — run SQL against a NanoMika database without the sqlite3 CLI.
  *
  * Usage:
  *   pnpm exec tsx scripts/q.ts <db-path> "<sql>"
  *
  * Uses better-sqlite3's stmt.reader property to distinguish queries
  * (SELECT / WITH...SELECT) from mutations. Queries print rows in
- * sqlite3 CLI default ("list") format — pipe-separated, no header —
- * so existing skill text reads identically. Mutations run via
- * stmt.run() (single statement) or db.exec() (compound).
+ * sqlite3 CLI default ("list") format — pipe-separated, no header.
+ * Mutations run via stmt.run() (single statement) or db.exec() (compound).
  *
- * Why this exists: setup/verify.ts:5 codifies that NanoMika avoids
- * depending on the sqlite3 CLI binary; setup never installs or probes
- * for it. Skills that shell out to `sqlite3` therefore fail on hosts
- * where it isn't preinstalled (common on fresh Ubuntu — see #2191).
- * This wrapper preserves the skill-text shape (path then SQL string)
- * while routing through the better-sqlite3 dep that setup already
- * installs and verifies.
+ * Why this exists: NanoMika does not depend on the sqlite3 CLI binary,
+ * which is missing on many fresh hosts. This wrapper goes through the
+ * better-sqlite3 dependency the host already uses.
  */
 import Database from 'better-sqlite3';
 

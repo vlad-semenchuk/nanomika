@@ -38,9 +38,57 @@ import {
 import { log } from './log.js';
 import type { Session } from './types.js';
 
-function isPathInside(parent: string, child: string): boolean {
-  const relative = path.relative(parent, child);
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+/**
+ * Walk `parts` below a session folder and return the path, or null when it is
+ * unsafe or missing. Everything under the session folder is writable by the
+ * container, so every component must be a real directory: a symlink anywhere
+ * on the path could point the host at any file it can read, write or delete.
+ * With `create`, missing components are made one at a time (never through a
+ * symlink).
+ */
+export function safeSessionPath(
+  agentGroupId: string,
+  sessionId: string,
+  parts: string[],
+  create = false,
+): string | null {
+  let p = sessionDir(agentGroupId, sessionId);
+  for (const part of parts) {
+    if (!isSafeAttachmentName(part)) return null;
+    p = path.join(p, part);
+    let st: fs.Stats | null = null;
+    try {
+      st = fs.lstatSync(p);
+    } catch {
+      // missing
+    }
+    if (!st) {
+      if (!create) return null;
+      try {
+        fs.mkdirSync(p);
+      } catch {
+        return null;
+      }
+    } else if (st.isSymbolicLink() || !st.isDirectory()) {
+      return null;
+    }
+  }
+  return p;
+}
+
+/** Read a regular file without following a symlink in its last component. */
+function readFileNoFollow(filePath: string): Buffer | null {
+  let fd: number;
+  try {
+    fd = fs.openSync(filePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  } catch {
+    return null;
+  }
+  try {
+    return fs.fstatSync(fd).isFile() ? fs.readFileSync(fd) : null;
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 /** Root directory for all session data. */
@@ -66,14 +114,6 @@ export function outboundDbPath(agentGroupId: string, sessionId: string): string 
 /** Path to the container heartbeat file (touched instead of DB writes). */
 export function heartbeatPath(agentGroupId: string, sessionId: string): string {
   return path.join(sessionDir(agentGroupId, sessionId), '.heartbeat');
-}
-
-/**
- * @deprecated Use inboundDbPath / outboundDbPath instead.
- * Kept temporarily for test compatibility during migration.
- */
-export function sessionDbPath(agentGroupId: string, sessionId: string): string {
-  return inboundDbPath(agentGroupId, sessionId);
 }
 
 function generateId(): string {
@@ -262,9 +302,9 @@ export function writeSessionMessage(
  *
  * Defenses, mirrored from the outbound side:
  *   1. basename check on `messageId` and `filename`.
- *   2. lstat of the inbox dir to refuse pre-placed symlinks.
- *   3. realpath-based containment under the session inbox root.
- *   4. `wx` flag on writeFileSync to refuse following a pre-existing symlink
+ *   2. `safeSessionPath`: no symlink anywhere between the session folder and
+ *      the inbox directory.
+ *   3. `wx` flag on writeFileSync to refuse following a pre-existing symlink
  *      at the target file path or overwriting any existing file.
  */
 function extractAttachmentFiles(
@@ -302,30 +342,9 @@ function extractAttachmentFiles(
       });
     }
 
-    const inboxDir = path.join(sessionDir(agentGroupId, sessionId), 'inbox', messageId);
-
-    // Refuse to mkdir through a symlink that the container may have pre placed
-    // at inboxDir. With recursive:true, mkdirSync would silently no op on a
-    // pre existing symlink and the subsequent writeFileSync would follow it.
-    if (fs.existsSync(inboxDir)) {
-      const stat = fs.lstatSync(inboxDir);
-      if (stat.isSymbolicLink() || !stat.isDirectory()) {
-        log.warn('Rejecting unsafe inbox directory', { messageId, inboxDir });
-        continue;
-      }
-    }
-    fs.mkdirSync(inboxDir, { recursive: true });
-
-    let realInboxDir: string;
-    try {
-      realInboxDir = fs.realpathSync(inboxDir);
-    } catch (err) {
-      log.warn('Failed to resolve inbox directory', { messageId, err });
-      continue;
-    }
-    const inboxRoot = path.join(sessionDir(agentGroupId, sessionId), 'inbox');
-    if (!isPathInside(fs.realpathSync(inboxRoot), realInboxDir)) {
-      log.warn('Inbox directory escaped session inbox root', { messageId, inboxDir });
+    const inboxDir = safeSessionPath(agentGroupId, sessionId, ['inbox', messageId], true);
+    if (!inboxDir) {
+      log.warn('Rejecting unsafe inbox directory', { messageId });
       continue;
     }
 
@@ -403,34 +422,6 @@ export function writeOutboundDirect(
 }
 
 /**
- * @deprecated Use openInboundDb / openOutboundDb instead.
- */
-export function openSessionDb(agentGroupId: string, sessionId: string): Database.Database {
-  return openInboundDb(agentGroupId, sessionId);
-}
-
-/** Write a system response to a session's inbound.db so the container's findQuestionResponse() picks it up. */
-export function writeSystemResponse(
-  agentGroupId: string,
-  sessionId: string,
-  requestId: string,
-  status: string,
-  result: Record<string, unknown>,
-): void {
-  writeSessionMessage(agentGroupId, sessionId, {
-    id: `sys-resp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    kind: 'system',
-    timestamp: new Date().toISOString(),
-    content: JSON.stringify({
-      type: 'question_response',
-      questionId: requestId,
-      status,
-      result,
-    }),
-  });
-}
-
-/**
  * Load outbox attachments for a delivered message.
  *
  * Symmetric with `extractAttachmentFiles` on the inbound side: the container
@@ -447,24 +438,11 @@ export function readOutboxFiles(
   messageId: string,
   filenames: string[],
 ): OutboundFile[] | undefined {
-  if (!isSafeAttachmentName(messageId)) {
-    log.warn('Rejecting unsafe outbox message id', { messageId });
-    return undefined;
-  }
-
-  const outboxDir = path.join(sessionDir(agentGroupId, sessionId), 'outbox', messageId);
-  if (!fs.existsSync(outboxDir)) return undefined;
-
-  let realOutboxDir: string;
-  try {
-    const stat = fs.lstatSync(outboxDir);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) {
-      log.warn('Rejecting unsafe outbox directory', { messageId, outboxDir });
-      return undefined;
+  const outboxDir = safeSessionPath(agentGroupId, sessionId, ['outbox', messageId]);
+  if (!outboxDir) {
+    if (fs.existsSync(path.join(sessionDir(agentGroupId, sessionId), 'outbox', String(messageId)))) {
+      log.warn('Rejecting unsafe outbox directory', { messageId });
     }
-    realOutboxDir = fs.realpathSync(outboxDir);
-  } catch (err) {
-    log.warn('Failed to inspect outbox directory', { messageId, err });
     return undefined;
   }
 
@@ -474,24 +452,12 @@ export function readOutboxFiles(
       log.warn('Refused unsafe outbox filename, would escape outbox', { messageId, filename });
       continue;
     }
-
-    const filePath = path.join(outboxDir, filename);
-    try {
-      const stat = fs.lstatSync(filePath);
-      if (!stat.isFile() || stat.isSymbolicLink()) {
-        log.warn('Rejecting unsafe outbox file', { messageId, filename });
-        continue;
-      }
-      const realFilePath = fs.realpathSync(filePath);
-      if (!isPathInside(realOutboxDir, realFilePath)) {
-        log.warn('Rejecting outbox file outside message directory', { messageId, filename });
-        continue;
-      }
-      files.push({ filename, data: fs.readFileSync(realFilePath) });
-    } catch {
-      log.warn('Outbox file not found', { messageId, filename });
-    }
+    const data = readFileNoFollow(path.join(outboxDir, filename));
+    if (data) files.push({ filename, data });
+    else log.warn('Outbox file missing or not a regular file', { messageId, filename });
   }
+  // Re-check after reading: a directory swapped for a symlink mid-read voids the result.
+  if (safeSessionPath(agentGroupId, sessionId, ['outbox', messageId]) !== outboxDir) return undefined;
   return files.length > 0 ? files : undefined;
 }
 
@@ -502,26 +468,10 @@ export function readOutboxFiles(
  * thrown error would trigger the delivery retry path and deliver twice.
  */
 export function clearOutbox(agentGroupId: string, sessionId: string, messageId: string): void {
-  if (!isSafeAttachmentName(messageId)) {
-    log.warn('Rejecting unsafe outbox cleanup message id', { messageId });
-    return;
-  }
-
-  const outboxDir = path.join(sessionDir(agentGroupId, sessionId), 'outbox', messageId);
-  if (!fs.existsSync(outboxDir)) return;
+  const outboxDir = safeSessionPath(agentGroupId, sessionId, ['outbox', messageId]);
+  if (!outboxDir) return;
   try {
-    const stat = fs.lstatSync(outboxDir);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) {
-      log.warn('Rejecting unsafe outbox cleanup directory', { messageId, outboxDir });
-      return;
-    }
-    const realOutboxBase = fs.realpathSync(path.join(sessionDir(agentGroupId, sessionId), 'outbox'));
-    const realOutboxDir = fs.realpathSync(outboxDir);
-    if (!isPathInside(realOutboxBase, realOutboxDir)) {
-      log.warn('Rejecting outbox cleanup outside session outbox', { messageId, outboxDir });
-      return;
-    }
-    fs.rmSync(realOutboxDir, { recursive: true, force: true });
+    fs.rmSync(outboxDir, { recursive: true, force: true });
   } catch (err) {
     log.warn('Outbox cleanup failed (message already delivered)', { messageId, err });
   }
@@ -530,11 +480,6 @@ export function clearOutbox(agentGroupId: string, sessionId: string, messageId: 
 /** Mark a container as running for a session. */
 export function markContainerRunning(sessionId: string): void {
   updateSession(sessionId, { container_status: 'running', last_active: new Date().toISOString() });
-}
-
-/** Mark a container as idle for a session. */
-export function markContainerIdle(sessionId: string): void {
-  updateSession(sessionId, { container_status: 'idle' });
 }
 
 /** Mark a container as stopped for a session. */

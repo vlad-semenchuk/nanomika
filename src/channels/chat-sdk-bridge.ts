@@ -55,10 +55,16 @@ export interface ChatSdkBridgeConfig {
   /**
    * Whether this platform uses threads as the primary conversation unit.
    * See `ChannelAdapter.supportsThreads`. Declared by the calling channel
-   * skill, not inferred, because some platforms (Discord) can be used either
+   * module, not inferred, because some platforms (Discord) can be used either
    * way and the default depends on installation style.
    */
   supportsThreads: boolean;
+  /**
+   * Register on the shared webhook server (0.0.0.0:WEBHOOK_PORT). Default true.
+   * Set false for adapters that receive events another way, such as Slack in
+   * Socket Mode, so no listening port is opened for them.
+   */
+  webhook?: boolean;
   /**
    * Optional transform applied to outbound text/markdown before it reaches the
    * adapter. Used by channels that need to sanitize for a platform-specific
@@ -357,8 +363,8 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
         };
         startGateway();
         log.info('Gateway listener started', { adapter: adapter.name });
-      } else {
-        // Non-gateway adapters (Slack, Teams, GitHub, etc.) — register on the shared webhook server
+      } else if (config.webhook !== false) {
+        // Non-gateway adapters in webhook mode: register on the shared webhook server
         registerWebhookAdapter(chat, adapter.name);
       }
 

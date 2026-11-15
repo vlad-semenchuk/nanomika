@@ -6,245 +6,109 @@ Implementation-level details for the architecture. See [architecture.md](archite
 
 ### NanoMika Channel Interface
 
+Defined in `src/channels/adapter.ts` (abridged):
+
 ```typescript
 interface ChannelSetup {
-  // Conversation configs from central DB — passed at setup, not queried by adapter
-  conversations: ConversationConfig[];
-
   // Host callbacks
-  onInbound(platformId: string, threadId: string | null, message: InboundMessage): void;
+  onInbound(platformId: string, threadId: string | null, message: InboundMessage): void | Promise<void>;
+  onInboundEvent(event: InboundEvent): void | Promise<void>;   // admin transports (CLI): route to any wired channel
   onMetadata(platformId: string, name?: string, isGroup?: boolean): void;
-}
-
-interface ConversationConfig {
-  platformId: string;
-  agentGroupId: string;
-  triggerPattern?: string;       // regex string (for native channels)
-  requiresTrigger: boolean;
-  sessionMode: 'shared' | 'per-thread';
+  onAction(questionId: string, selectedOption: string, userId: string): void;  // card button / question answer
 }
 
 interface ChannelAdapter {
   name: string;
   channelType: string;
+  supportsThreads: boolean;   // true: one thread = one session; false: thread ids stripped at the router
 
   // Lifecycle
   setup(config: ChannelSetup): Promise<void>;
   teardown(): Promise<void>;
   isConnected(): boolean;
 
-  // Outbound delivery
-  deliver(platformId: string, threadId: string | null, message: OutboundMessage): Promise<void>;
+  // Outbound delivery — returns the platform message ID if available
+  deliver(platformId: string, threadId: string | null, message: OutboundMessage): Promise<string | undefined>;
 
   // Optional
   setTyping?(platformId: string, threadId: string | null): Promise<void>;
   syncConversations?(): Promise<ConversationInfo[]>;
-  updateConversations?(conversations: ConversationConfig[]): void;
+  resolveChannelName?(platformId: string): Promise<string | null>;
+  subscribe?(platformId: string, threadId: string): Promise<void>;
+  openDM?(userHandle: string): Promise<string>;
 }
 
 // Inbound message from adapter to host
 interface InboundMessage {
   id: string;
   kind: 'chat' | 'chat-sdk';
-  content: unknown;       // JSON blob — NanoMika chat format or Chat SDK SerializedMessage
+  content: unknown;       // JS object — host JSON.stringifies it before writing to the session DB
   timestamp: string;
+  isMention?: boolean;    // platform-confirmed bot mention
+  isGroup?: boolean;      // group/channel thread vs DM
 }
 
 // Outbound message from host to adapter
 interface OutboundMessage {
-  kind: 'chat' | 'chat-sdk';
-  content: unknown;       // JSON blob — matches the kind
+  kind: string;
+  content: unknown;       // parsed JSON from messages_out
+  files?: OutboundFile[]; // { filename, data: Buffer } read from the session outbox
 }
 ```
+
+Adapters register themselves with `registerChannelAdapter(name, { factory })` (`src/channels/channel-registry.ts`); the barrel `src/channels/index.ts` imports each channel module for that side effect. A factory returns `null` when its credentials are missing, and the channel is skipped.
 
 ### Chat SDK Bridge
 
-Wraps a Chat SDK adapter + Chat instance to conform to the NanoMika ChannelAdapter interface. Trunk ships the bridge and the channel registry only — platform-specific Chat SDK adapters (Discord, Slack, Telegram, etc.) and native adapters (WhatsApp/Baileys) are installed by the `/add-<channel>` skills from the `channels` branch.
+`createChatSdkBridge(config)` in `src/channels/chat-sdk-bridge.ts` wraps a Chat SDK adapter + `Chat` instance to conform to the NanoMika `ChannelAdapter` interface. `src/channels/slack.ts` uses it (its import in `src/channels/index.ts` is commented out by default).
 
 ```typescript
-function createChatSdkBridge(
-  adapter: Adapter,
-  chatConfig: { concurrency?: ConcurrencyStrategy }
-): ChannelAdapter {
-  let chat: Chat;
-  let hostCallbacks: ChannelSetup;
-
-  return {
-    name: adapter.name,
-    channelType: adapter.name,
-
-    async setup(config) {
-      hostCallbacks = config;
-
-      chat = new Chat({
-        adapters: { [adapter.name]: adapter },
-        state: new SqliteStateAdapter(),
-        concurrency: chatConfig.concurrency ?? 'concurrent',
-      });
-
-      // Subscribe registered conversations
-      for (const conv of config.conversations) {
-        if (conv.agentGroupId) {
-          await chat.state.subscribe(conv.platformId);
-        }
-      }
-
-      // Subscribed threads → forward all messages
-      chat.onSubscribedMessage(async (thread, message) => {
-        const channelId = adapter.channelIdFromThreadId(thread.id);
-        config.onInbound(channelId, thread.id, {
-          id: message.id,
-          kind: 'chat-sdk',
-          content: message.toJSON(),
-          timestamp: message.metadata.dateSent.toISOString(),
-        });
-      });
-
-      // @mention in unsubscribed thread → discovery
-      chat.onNewMention(async (thread, message) => {
-        const channelId = adapter.channelIdFromThreadId(thread.id);
-        config.onInbound(channelId, thread.id, {
-          id: message.id,
-          kind: 'chat-sdk',
-          content: message.toJSON(),
-          timestamp: message.metadata.dateSent.toISOString(),
-        });
-        // Subscribe so future messages in this thread are received
-        await thread.subscribe();
-      });
-
-      // DMs → always forward
-      chat.onDirectMessage(async (thread, message) => {
-        config.onInbound(thread.id, null, {
-          id: message.id,
-          kind: 'chat-sdk',
-          content: message.toJSON(),
-          timestamp: message.metadata.dateSent.toISOString(),
-        });
-        await thread.subscribe();
-      });
-
-      await chat.initialize();
-    },
-
-    async deliver(platformId, threadId, message) {
-      const tid = threadId ?? platformId;
-      if (message.kind === 'chat-sdk') {
-        const content = message.content as Record<string, unknown>;
-        if (content.operation === 'edit') {
-          await adapter.editMessage(tid, content.messageId as string, 
-            { markdown: content.text as string });
-        } else if (content.operation === 'reaction') {
-          await adapter.addReaction(tid, content.messageId as string, 
-            content.emoji as string);
-        } else {
-          await adapter.postMessage(tid, content as AdapterPostableMessage);
-        }
-      } else {
-        const content = message.content as { text: string };
-        await adapter.postMessage(tid, { markdown: content.text });
-      }
-    },
-
-    async setTyping(platformId, threadId) {
-      await adapter.startTyping(threadId ?? platformId);
-    },
-
-    async teardown() {
-      await chat.shutdown();
-    },
-
-    isConnected() { return true; },
-
-    updateConversations(conversations) {
-      // Subscribe new conversations, could unsubscribe removed ones
-      for (const conv of conversations) {
-        if (conv.agentGroupId) {
-          chat.state.subscribe(conv.platformId);
-        }
-      }
-    },
-  };
+interface ChatSdkBridgeConfig {
+  adapter: Adapter;
+  concurrency?: ConcurrencyStrategy;   // default 'concurrent'
+  botToken?: string;
+  extractReplyContext?: ReplyContextExtractor;
+  supportsThreads: boolean;
+  webhook?: boolean;                    // default true; false opens no port (Slack Socket Mode)
+  transformOutboundText?: (text: string) => string;
+  maxTextLength?: number;               // split longer outbound text
 }
 ```
+
+What the bridge does:
+
+- **Setup:** creates a `Chat` with a `SqliteStateAdapter` and forwards four Chat SDK dispatch paths to `onInbound` as `kind: 'chat-sdk'` messages: `onSubscribedMessage` (carries `message.isMention`), `onNewMention` (`isMention: true`), `onDirectMessage` (`isMention: true`, `isGroup: false`) and `onNewMessage` for plain messages in unsubscribed threads. All engage / accumulate / drop / subscribe decisions are made by the host router (`src/router.ts`), which calls back into `bridge.subscribe(...)` when a wiring engages in a thread.
+- **Actions:** `chat.onAction` handles `ask_user_question` button clicks (action ids prefixed `ncq:`), edits the card to show the chosen answer, and calls `onAction(questionId, selectedOption, userId)`.
+- **Delivery** (`deliver`), using `threadId ?? platformId` as the target:
+  - `{ operation: 'edit', messageId, text }` → `adapter.editMessage`
+  - `{ operation: 'reaction', messageId, emoji }` → `adapter.addReaction`
+  - `{ type: 'ask_question', ... }` → a card with one button per option
+  - `{ type: 'card', card, fallbackText }` → a display card (only URL actions are kept, as link buttons)
+  - otherwise `markdown` or `text` → `adapter.postMessage` with `{ markdown }`, with outbox files attached to the first chunk
+- **Typing:** `setTyping` → `adapter.startTyping`.
 
 ### Native NanoMika Channel (no Chat SDK)
 
-Native channels implement the ChannelAdapter interface directly. The WhatsApp/Baileys adapter is the canonical example — it ships via the `/add-whatsapp` skill, not in trunk:
+Native channels implement the `ChannelAdapter` interface directly. The local CLI channel (`src/channels/cli.ts`, `channelType: 'cli'`, platform id `local`) is the in-tree example and the only channel imported by default:
 
-```typescript
-function createWhatsAppChannel(): ChannelAdapter {
-  let socket: WASocket;
-  let config: ChannelSetup;
-
-  return {
-    name: 'whatsapp',
-    channelType: 'whatsapp',
-
-    async setup(setup) {
-      config = setup;
-      socket = await connectBaileys();
-
-      socket.on('messages.upsert', (event) => {
-        for (const msg of event.messages) {
-          const jid = msg.key.remoteJid;
-          const conv = config.conversations.find(c => c.platformId === jid);
-
-          // Trigger check (native — adapter does this, not host)
-          if (conv?.requiresTrigger && conv.triggerPattern) {
-            if (!new RegExp(conv.triggerPattern).test(msg.message?.conversation || '')) {
-              return; // Doesn't match trigger
-            }
-          }
-
-          config.onInbound(jid, null, {
-            id: msg.key.id,
-            kind: 'chat',
-            content: {
-              sender: msg.pushName || msg.key.participant,
-              senderId: msg.key.participant || msg.key.remoteJid,
-              text: msg.message?.conversation || '',
-              attachments: [],
-              isFromMe: msg.key.fromMe,
-            },
-            timestamp: new Date(msg.messageTimestamp * 1000).toISOString(),
-          });
-        }
-      });
-    },
-
-    async deliver(platformId, threadId, message) {
-      const content = message.content as { text: string };
-      await socket.sendMessage(platformId, { text: content.text });
-    },
-
-    async setTyping(platformId) {
-      await socket.sendPresenceUpdate('composing', platformId);
-    },
-
-    async teardown() {
-      await socket.logout();
-    },
-
-    isConnected() { return !!socket; },
-  };
-}
-```
+- **Setup:** listens on the Unix socket `data/cli.sock`. The client `scripts/chat.ts` (`pnpm run chat <message>`) writes one JSON line per message (`{ "text": "..." }`) and reads JSON lines back. A line with `to` (and optional `reply_to`) is routed through `onInboundEvent` to any wired messaging group; otherwise the message goes through `onInbound` as `kind: 'chat'` with content `{ text, sender: 'cli', senderId: 'cli:local' }`.
+- **Delivery:** writes `{ "text": ... }` to the connected client, or keeps it in a small backlog for the next client. `ask_question` cards are printed as text with numbered options.
+- **Answers:** `/answer <questionId> <number|option>` is not routed to the agent; the adapter resolves the option and calls `onAction(questionId, value, 'cli:local')`.
 
 ## Session DB Schema Details
 
 ### messages_in content examples
 
-**`chat`** — simple NanoMika format:
+**`chat`** — NanoMika chat format (what the CLI channel writes):
 ```json
 {
-  "sender": "John",
-  "senderId": "user123",
-  "text": "Check this PR",
-  "attachments": [{ "type": "image", "url": "https://signed-url..." }],
-  "isFromMe": false
+  "sender": "cli",
+  "senderId": "cli:local",
+  "text": "Check this PR"
 }
 ```
+
+Optional fields the formatter reads: `attachments` (`[{ "type", "name", "url" | "localPath" }]`) and `replyTo` (`{ "id", "sender", "text" }`).
 
 **`chat-sdk`** — full Chat SDK `SerializedMessage`:
 ```json
@@ -262,104 +126,107 @@ function createWhatsAppChannel(): ChannelAdapter {
 }
 ```
 
-**Question response** (from user clicking an interactive card):
+Inbound attachments carrying base64 `data` are saved by the host to the session's `inbox/<messageId>/` directory and replaced with `"localPath": "inbox/<messageId>/<filename>"`.
+
+**Question response** (`kind: 'system'`, written by the host when the user answers an `ask_user_question` card):
 ```json
 {
-  "sender": "John",
-  "senderId": "user123",
-  "text": "Yes",
-  "questionId": "q-123",
-  "selectedOption": "Yes",
-  "isFromMe": false
+  "type": "question_response",
+  "questionId": "msg-1712345678-ab12cd",
+  "selectedOption": "fix",
+  "userId": "cli:local"
 }
 ```
 
 ### messages_out content examples
 
-**Normal chat message:**
+**Normal chat message** (`kind: 'chat'`):
 ```json
 { "text": "LGTM, merging now" }
 ```
 
-**Chat SDK markdown:**
+**Chat message with files** (files are in the session `outbox/<message id>/`):
 ```json
-{ "markdown": "## Review Summary\n**Status**: Approved\n\nNo issues found." }
+{ "text": "Here is the report", "files": ["report.pdf"] }
 ```
 
-**Card:**
+**Card** (`kind: 'chat-sdk'`, from `send_card`):
 ```json
 {
+  "type": "card",
   "card": {
-    "type": "card",
-    "title": "Deployment Approval",
-    "children": [
-      { "type": "text", "content": "Deploy 2.1.0 to production?" },
-      { "type": "actions", "children": [
-        { "type": "button", "id": "approve", "label": "Approve", "style": "primary" },
-        { "type": "button", "id": "reject", "label": "Reject", "style": "danger" }
-      ]}
-    ]
+    "title": "Deployment Status",
+    "description": "Version 2.1.0 is live.",
+    "children": ["All checks passed."]
   },
-  "fallbackText": "Deployment Approval: Deploy 2.1.0 to production? [Approve] [Reject]"
+  "fallbackText": "Deployment Status: Version 2.1.0 is live."
 }
 ```
 
-**Ask user question:**
+**Ask user question** (`kind: 'chat-sdk'`, from `ask_user_question`):
 ```json
 {
-  "operation": "ask_question",
-  "questionId": "q-123",
+  "type": "ask_question",
+  "questionId": "msg-1712345678-ab12cd",
   "title": "Failing Test",
   "question": "How should we handle the failing test?",
   "options": [
-    "Skip it",
+    { "label": "Skip it", "selectedLabel": "Skip it", "value": "Skip it" },
     { "label": "Fix and retry", "selectedLabel": "✅ Fixing", "value": "fix" },
     { "label": "Abort deployment", "selectedLabel": "❌ Aborted", "value": "abort" }
   ]
 }
 ```
 
-**Edit message:**
+**Edit message** (`kind: 'chat'`; `messageId` is the platform message ID the host recorded at delivery):
 ```json
-{ "operation": "edit", "messageId": "3", "text": "Updated: LGTM with minor comments on line 42" }
+{ "operation": "edit", "messageId": "1712345678.000100", "text": "Updated: LGTM with minor comments on line 42" }
 ```
 
-**Reaction:**
+**Reaction** (`kind: 'chat'`):
 ```json
-{ "operation": "reaction", "messageId": "5", "emoji": "thumbs_up" }
+{ "operation": "reaction", "messageId": "1712345678.000100", "emoji": "thumbs_up" }
 ```
 
-**System action:**
+**System action** (`kind: 'system'`):
 ```json
-{ "action": "reset_session", "payload": { "session_id": "sess-123", "reason": "Skills updated" } }
+{ "action": "cancel_task", "taskId": "msg-1712345678-ab12cd" }
 ```
+
+Registered system actions: `schedule_task`, `cancel_task`, `pause_task`, `resume_task`, `update_task` (`src/modules/scheduling/`), `create_agent` (`src/modules/agent-to-agent/`), and `cli_request` (`src/cli/delivery-action.ts`, used by the in-container `ncl`).
 
 ## Host Delivery Logic
 
-The host reads messages_out and dispatches based on `kind` and `operation`:
+`src/delivery.ts` polls each session's `outbound.db` and dispatches every undelivered row in `deliverMessage()`:
 
 ```typescript
-async function deliverMessage(row: MessagesOutRow, adapter: ChannelAdapter) {
-  const content = JSON.parse(row.content);
+async function deliverMessage(msg, session, inDb) {
+  const content = JSON.parse(msg.content);
 
-  // System actions — host handles internally
-  if (row.kind === 'system') {
-    await handleSystemAction(content);
+  // System actions — handled by the action registered via registerDeliveryAction()
+  if (msg.kind === 'system') {
+    await handleSystemAction(content, session, inDb);
     return;
   }
 
-  // Agent-to-agent — write to target session DB
-  if (isAgentDestination(row)) {
-    await writeToAgentSession(row);
+  // Agent-to-agent — write to the target agent's session
+  if (msg.channel_type === 'agent') {
+    await routeAgentMessage(msg, session);
     return;
   }
 
-  // Channel delivery — delegate to adapter
-  await adapter.deliver(row.platform_id, row.thread_id, {
-    kind: row.kind,
-    content,
-  });
+  // Permission check: the origin chat is always allowed; any other messaging
+  // group needs an agent_destinations row for this agent group.
+
+  // ask_question → record in pending_questions
+
+  // Channel delivery — read outbox files, then delegate to the adapter
+  const platformMsgId = await deliveryAdapter.deliver(
+    msg.channel_type, msg.platform_id, msg.thread_id, msg.kind, msg.content, files,
+  );
+  clearOutbox(session.agent_group_id, session.id, msg.id);
+  return platformMsgId;
 }
 ```
 
-The adapter's `deliver()` method handles operation dispatch internally (post vs edit vs reaction).
+The delivery adapter (`src/index.ts`) looks up the channel adapter by `channel_type` and calls its `deliver()`, which handles operation dispatch internally (post vs edit vs reaction vs card). A thrown error falls into the retry path and eventually marks the message failed.

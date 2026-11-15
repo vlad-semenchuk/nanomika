@@ -1,14 +1,18 @@
 /**
- * ncl — chat with your NanoMika agent from the terminal.
+ * chat — talk to your NanoMika agent from the terminal.
  *
  * Usage:
- *   pnpm run chat <message...>
+ *   pnpm run chat <message...>   send a message and print the reply
+ *   pnpm run chat                print what arrived while no chat was open
  *
  * Sends the message through the CLI channel (Unix socket) to the wired agent.
- * Reads replies until the stream goes quiet, then exits.
+ * Reads replies until the stream goes quiet, then exits. Anything the agent
+ * sent while no chat was connected (a late reply, a scheduled task's output,
+ * an approval request) is printed first, marked "[earlier]".
  *
- * Preconditions: NanoMika host service running, an agent group wired to
- * `cli/local` via `/init-first-agent` or `/manage-channels`.
+ * Preconditions: the NanoMika host is running (`pnpm start` or `pnpm dev`)
+ * and an agent group is wired to `cli/local` (the host creates one on first
+ * start; see src/bootstrap.ts).
  */
 import net from 'net';
 import path from 'path';
@@ -17,26 +21,24 @@ import { DATA_DIR } from '../src/config.js';
 
 const SILENCE_MS = 2000; // exit after this much quiet time following the first reply
 const TOTAL_TIMEOUT_MS = 120_000; // hard stop
+const CATCH_UP_MS = 500; // with no message: how long to wait for missed messages
 
 function socketPath(): string {
   return path.join(DATA_DIR, 'cli.sock');
 }
 
 function main(): void {
-  const words = process.argv.slice(2);
-  if (words.length === 0) {
-    console.error('usage: pnpm run chat <message...>');
-    process.exit(1);
-  }
-  const text = words.join(' ');
+  const text = process.argv.slice(2).join(' ').trim();
+  const catchUpOnly = text.length === 0;
+  let missedCount = 0;
 
   const socket = net.connect(socketPath());
 
   socket.on('error', (err) => {
     const e = err as NodeJS.ErrnoException;
     if (e.code === 'ENOENT' || e.code === 'ECONNREFUSED') {
-      console.error(`NanoMika daemon not reachable at ${socketPath()}.`);
-      console.error('Start the service (launchctl/systemd) before running ncl.');
+      console.error(`chat: cannot reach NanoMika host at ${socketPath()} (${e.code}).`);
+      console.error('Is the host running? Start it with `pnpm start` (or `pnpm dev`) in another terminal.');
     } else {
       console.error('CLI socket error:', err);
     }
@@ -56,6 +58,15 @@ function main(): void {
   }
 
   socket.on('connect', () => {
+    if (catchUpOnly) {
+      socket.write(JSON.stringify({ backlog: true }) + '\n');
+      setTimeout(() => {
+        if (missedCount === 0) console.log('(no new messages)');
+        socket.end();
+        process.exit(0);
+      }, CATCH_UP_MS);
+      return;
+    }
     socket.write(JSON.stringify({ text }) + '\n');
     hardTimer = setTimeout(() => {
       if (!firstReplySeen) {
@@ -76,7 +87,15 @@ function main(): void {
       if (!line) continue;
       try {
         const msg = JSON.parse(line);
-        if (typeof msg.text === 'string') {
+        if (msg.superseded === true) {
+          console.error('chat: another `pnpm run chat` took over the terminal channel; its replies go there.');
+          socket.end();
+          process.exit(4);
+        } else if (typeof msg.text === 'string' && msg.backlog === true) {
+          // Missed while no chat was open: print it, keep waiting for the reply.
+          process.stdout.write(`[earlier] ${msg.text}\n`);
+          missedCount++;
+        } else if (typeof msg.text === 'string') {
           process.stdout.write(msg.text + '\n');
           firstReplySeen = true;
           if (hardTimer) {
@@ -94,7 +113,8 @@ function main(): void {
   socket.on('close', () => {
     if (silenceTimer) clearTimeout(silenceTimer);
     if (hardTimer) clearTimeout(hardTimer);
-    process.exit(firstReplySeen ? 0 : 3);
+    if (!firstReplySeen && !catchUpOnly) console.error('chat: the host closed the connection before a reply arrived.');
+    process.exit(firstReplySeen || catchUpOnly ? 0 : 3);
   });
 }
 

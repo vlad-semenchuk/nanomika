@@ -11,16 +11,14 @@
  *
  * Runs on every spawn from `container-runner.buildMounts()`. Deterministic —
  * same inputs produce the same CLAUDE.md, and stale fragments are pruned.
- *
- * See `docs/claude-md-composition.md` for the full design.
  */
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
-import { GROUPS_DIR } from './config.js';
+import { resolveGroupFolderPath } from './group-folder.js';
 import type { McpServerConfig } from './container-config.js';
 import { getContainerConfig } from './db/container-configs.js';
-import { log } from './log.js';
 import type { AgentGroup } from './types.js';
 
 // Symlink targets are container paths — dangling on host (hence the readlink
@@ -41,7 +39,7 @@ const COMPOSED_HEADER = '<!-- Composed at spawn — do not edit. Edit CLAUDE.loc
  * an empty `CLAUDE.local.md` if missing.
  */
 export function composeGroupClaudeMd(group: AgentGroup): void {
-  const groupDir = path.resolve(GROUPS_DIR, group.folder);
+  const groupDir = resolveGroupFolderPath(group.folder);
   if (!fs.existsSync(groupDir)) {
     fs.mkdirSync(groupDir, { recursive: true });
   }
@@ -78,7 +76,7 @@ export function composeGroupClaudeMd(group: AgentGroup): void {
 
   // Built-in module fragments — every MCP tool source file that ships a
   // sibling `<name>.instructions.md`. These describe how the agent should
-  // use that module's MCP tools (schedule_task, install_packages, etc.).
+  // use that module's MCP tools (schedule_task, ask_user_question, etc.).
   // Skip cli.instructions.md when cli_scope is disabled.
   const cliDisabled = configRow?.cli_scope === 'disabled';
   const mcpToolsHostDir = path.join(process.cwd(), MCP_TOOLS_HOST_SUBPATH);
@@ -135,59 +133,6 @@ export function composeGroupClaudeMd(group: AgentGroup): void {
   }
 }
 
-/**
- * One-time cutover from the `groups/global/CLAUDE.md` + `.claude-global.md`
- * pattern. Idempotent — safe to run on every host startup.
- *
- * For each group dir:
- *   - remove `.claude-global.md` symlink if present
- *   - rename `CLAUDE.md` → `CLAUDE.local.md` (only if `CLAUDE.local.md`
- *     doesn't already exist — preserves pre-cutover content as per-group
- *     memory; after the first spawn regenerates `CLAUDE.md`, this branch
- *     is skipped because `CLAUDE.local.md` now exists)
- *
- * Globally:
- *   - delete `groups/global/` (content already in `container/CLAUDE.md`)
- */
-export function migrateGroupsToClaudeLocal(): void {
-  if (!fs.existsSync(GROUPS_DIR)) return;
-
-  const actions: string[] = [];
-
-  for (const entry of fs.readdirSync(GROUPS_DIR, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    if (entry.name === 'global') continue;
-
-    const groupDir = path.join(GROUPS_DIR, entry.name);
-
-    const oldGlobalLink = path.join(groupDir, '.claude-global.md');
-    try {
-      fs.lstatSync(oldGlobalLink);
-      fs.unlinkSync(oldGlobalLink);
-      actions.push(`${entry.name}/.claude-global.md removed`);
-    } catch {
-      /* already gone */
-    }
-
-    const claudeMd = path.join(groupDir, 'CLAUDE.md');
-    const claudeLocal = path.join(groupDir, 'CLAUDE.local.md');
-    if (fs.existsSync(claudeMd) && !fs.existsSync(claudeLocal)) {
-      fs.renameSync(claudeMd, claudeLocal);
-      actions.push(`${entry.name}/CLAUDE.md → CLAUDE.local.md`);
-    }
-  }
-
-  const globalDir = path.join(GROUPS_DIR, 'global');
-  if (fs.existsSync(globalDir)) {
-    fs.rmSync(globalDir, { recursive: true, force: true });
-    actions.push('groups/global/ removed');
-  }
-
-  if (actions.length > 0) {
-    log.info('Migrated groups to CLAUDE.local.md model', { actions });
-  }
-}
-
 function syncSymlink(linkPath: string, target: string): void {
   let currentTarget: string | null = null;
   try {
@@ -204,8 +149,13 @@ function syncSymlink(linkPath: string, target: string): void {
   fs.symlinkSync(target, linkPath);
 }
 
+/**
+ * Write via a temp file and rename. The group folder is writable by the
+ * container: the random name and `wx` keep the host from writing through a
+ * pre-placed symlink, and rename replaces a symlink at `filePath` itself.
+ */
 function writeAtomic(filePath: string, content: string): void {
-  const tmp = `${filePath}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, content);
+  const tmp = `${filePath}.tmp-${crypto.randomBytes(8).toString('hex')}`;
+  fs.writeFileSync(tmp, content, { flag: 'wx' });
   fs.renameSync(tmp, filePath);
 }

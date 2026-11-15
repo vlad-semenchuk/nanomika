@@ -7,8 +7,8 @@
  *     module that needs admin confirmation before doing something sensitive.
  *   - `registerApprovalHandler(action, handler)` — called at module import
  *     time. When the admin approves a pending row with matching `action`,
- *     the response handler dispatches into the registered callback. Optional
- *     modules (self-mod, future module gates) register here.
+ *     the response handler dispatches into the registered callback. Approval-
+ *     gated `ncl` commands (src/cli/dispatch.ts) register here.
  *
  * Approver picking lives here too — it used to sit in src/access.ts and got
  * folded in with the PR #7 re-tier. The picks functions walk user_roles

@@ -2,7 +2,7 @@
 
 Orientation for the data model: the three databases, how they fit together, and the invariants that hold across them. For table-level schemas, follow the links below.
 
-- **[db-central.md](db-central.md)** — every table in `data/v2.db` (identity, wiring, approvals, Chat SDK state) plus the migration system.
+- **[db-central.md](db-central.md)** — every table in `data/v2.db` (identity, wiring, approvals, container config, Chat SDK state) plus the migration system.
 - **[db-session.md](db-session.md)** — the per-session `inbound.db` + `outbound.db` pair, seq parity, and session folder layout.
 
 Related: [architecture.md](architecture.md) for the high-level design; [api-details.md](api-details.md) for inbound/outbound message content shapes; [isolation-model.md](isolation-model.md) for channel-to-agent wiring modes.
@@ -19,7 +19,7 @@ NanoMika uses **three kinds of SQLite database**, all on the host filesystem:
 | **Session inbound** | `data/v2-sessions/<agent_group_id>/<session_id>/inbound.db` | host | host (sync), container (read-only) | Host → container messages + routing projections |
 | **Session outbound** | `data/v2-sessions/<agent_group_id>/<session_id>/outbound.db` | container | host (poll), container | Container → host messages + processing status |
 
-**Single-writer rule.** Every SQLite file has exactly one writer. Host writes the central DB and every `inbound.db`; container writes only its own `outbound.db`. This eliminates write contention across the Docker/Apple Container mount boundary — SQLite locking across that boundary is unreliable.
+**Single-writer rule.** Every SQLite file has exactly one writer. Host writes the central DB and every `inbound.db`; container writes only its own `outbound.db`. This eliminates write contention across the host–container mount boundary — SQLite locking across that boundary is unreliable.
 
 **Everything is a message.** There is no IPC, stdin piping, or file watcher between host and container. The two session DBs are the sole IO surface. Heartbeat is a file `touch(2)` on `.heartbeat`, not a DB write.
 
@@ -35,7 +35,6 @@ data/
   v2-sessions/
     <agent_group_id>/
       .claude-shared/                     ← shared Claude state for the agent group
-      agent-runner-src/                   ← per-group agent-runner overlay
       <session_id>/
         inbound.db                        ← host writes, container reads
         outbound.db                       ← container writes, host reads
@@ -44,7 +43,7 @@ data/
         outbox/<message_id>/              ← attachments the agent produced
 ```
 
-Path helpers: `sessionDir()`, `inboundDbPath()`, `outboundDbPath()`, `heartbeatPath()` — all in `src/session-manager.ts`.
+Path helpers: `sessionDir()`, `inboundDbPath()`, `outboundDbPath()`, `heartbeatPath()` — all in `src/session-manager.ts`. The per-group `.claude-shared/` directory is created by `initGroupFilesystem()` in `src/group-init.ts`.
 
 ---
 
@@ -57,11 +56,13 @@ Path helpers: `sessionDir()`, `inboundDbPath()`, `outboundDbPath()`, `heartbeatP
 | Destination ACL | central (+ projection per session) | Source of truth centrally; fast local lookup per session |
 | Session registry (ids, status) | central | Host orchestrates lifecycle |
 | Approvals & pending questions | central | Survive container restarts, admin-visible |
+| Container runtime config | central (`container_configs`) | Admin plane; materialized to `groups/<folder>/container.json` at spawn |
 | Dropped-message audit | central | Global ops view |
 | Inbound messages, retry state | session `inbound.db` | Per-session workload; host is sole writer |
 | Outbound messages, agent state | session `outbound.db` | Container is sole writer; host polls |
 | Delivery outcome | session `inbound.db` (`delivered`) | Host writes on success; container reads for edit targeting |
 | Processing status | session `outbound.db` (`processing_ack`) | Container can't write to `inbound.db` |
+| Tool-in-flight state | session `outbound.db` (`container_state`) | Container is sole writer; host sweep reads it |
 
 Heuristic: if the value is a message, routing projection, or runtime ack, it goes per-session. Everything else is central.
 
@@ -69,14 +70,14 @@ Heuristic: if the value is a message, routing projection, or runtime ack, it goe
 
 ## 4. Cross-mount visibility
 
-Session DBs are bind-mounted into the container. A few rules you need to know before touching the DB code:
+The session folder (holding both session DBs) is bind-mounted into the container at `/workspace`. A few rules you need to know before touching the DB code:
 
 - **`journal_mode = DELETE`, not WAL.** WAL files don't reliably cross the mount and the container can read stale pages. DELETE mode forces each writer to flush the main file.
 - **Open-write-close on the host.** Host-side writes to `inbound.db` open a connection, write, and close it. Keeping a handle open makes cached pages invisible to the container.
-- **Container reads read-only.** The container opens `inbound.db` with `readonly: true` and never writes — all container→host state goes through `outbound.db` (see `processing_ack` in [db-session.md](db-session.md#52-processing_ack)).
+- **Container reads read-only.** The container opens `inbound.db` with `readonly: true` (`container/agent-runner/src/db/connection.ts`) and never writes — all container→host state goes through `outbound.db` (see `processing_ack` in [db-session.md](db-session.md#52-processing_ack)).
 - **Heartbeat is a file touch.** `.heartbeat` mtime is the liveness signal, not a DB column. A DB write per heartbeat would serialize behind other writers.
 
-These rules are enforced by convention in `src/session-manager.ts` and `container/agent-runner/src/db/`. If you change how the DBs are opened, re-read that code first.
+These rules are enforced by convention in `src/session-manager.ts`, `src/db/session-db.ts` and `container/agent-runner/src/db/`. If you change how the DBs are opened, re-read that code first.
 
 ---
 
@@ -84,10 +85,10 @@ These rules are enforced by convention in `src/session-manager.ts` and `containe
 
 1. **Two-DB session split.** `inbound.db` and `outbound.db` each have one writer, one direction of flow — no cross-mount lock contention.
 2. **Seq parity.** Even = host, odd = container. Disjoint namespace across both tables lets the agent reference any message by `seq` alone. Details in [db-session.md §3](db-session.md#3-sequence-numbering-invariant).
-3. **Projection pattern.** `agent_destinations` and `session_routing` are projected from the central DB into each session's `inbound.db` on container wake — the container gets a fast, local read path without querying across the mount.
+3. **Projection pattern.** `agent_destinations` (as `destinations`) and the session's origin chat (as `session_routing`) are projected from the central DB into each session's `inbound.db` on container wake — the container gets a fast, local read path without querying across the mount.
 4. **Ack via reverse channel.** Container never writes to `inbound.db`. Status sync happens through `processing_ack` in `outbound.db`, which the host polls and reconciles.
 5. **Heartbeat out of band.** File `touch` on `.heartbeat`, not a DB write, so liveness doesn't serialize behind other writers.
-6. **Lazy session-DB migrations.** Central DB uses numbered migrations; per-session DBs use `IF NOT EXISTS` + ad-hoc `ALTER TABLE` helpers for older session folders.
+6. **Lazy session-DB migrations.** Central DB uses named migrations; per-session DBs use `IF NOT EXISTS` + ad-hoc `ALTER TABLE` helpers for older session folders.
 7. **ACL = row existence.** `agent_destinations` membership is itself the permission — no separate `permissions` table.
 
 ---
@@ -96,24 +97,28 @@ These rules are enforced by convention in `src/session-manager.ts` and `containe
 
 | Table | DB | Writer(s) | Reader(s) |
 |-------|----|-----------|-----------|
-| `agent_groups` | central | `src/db/agent-groups.ts` | session resolver, delivery, router |
-| `messaging_groups` | central | `src/db/messaging-groups.ts`, channel setup | router, delivery, session resolver |
-| `messaging_group_agents` | central | `src/db/messaging-groups.ts` | router |
-| `users` | central | `src/db/users.ts`, auth flows | permission checks |
-| `user_roles` | central | `src/db/user-roles.ts` | `src/access.ts`, all permission gates |
-| `agent_group_members` | central | `src/db/agent-group-members.ts` | membership checks |
-| `user_dms` | central | `src/user-dm.ts` (`ensureUserDm`) | approval + pairing delivery |
+| `agent_groups` | central | `src/db/agent-groups.ts` (`src/bootstrap.ts`, `create_agent`, channel approval), `ncl groups` | session resolver, delivery, router |
+| `messaging_groups` | central | `src/db/messaging-groups.ts` (`src/bootstrap.ts`, router auto-create, `ensureUserDm`), `ncl messaging-groups` | router, delivery, session resolver |
+| `messaging_group_agents` | central | `src/db/messaging-groups.ts` (`src/bootstrap.ts`, `src/modules/permissions/`), `ncl wirings` | router |
+| `users` | central | `src/modules/permissions/db/users.ts` (`src/bootstrap.ts`, sender resolution), `ncl users` | permission checks |
+| `user_roles` | central | `src/modules/permissions/db/user-roles.ts` (`src/bootstrap.ts`), `ncl roles` | `src/modules/permissions/access.ts`, `src/command-gate.ts`, approver picking |
+| `agent_group_members` | central | `src/modules/permissions/db/agent-group-members.ts`, `ncl members` | membership checks |
+| `user_dms` | central | `src/modules/permissions/user-dm.ts` (`ensureUserDm`) | approval delivery |
 | `sessions` | central | `src/db/sessions.ts`, `src/session-manager.ts` | delivery, sweep, container runner |
-| `pending_questions` | central | `src/db/sessions.ts` (via `ask_user_question`) | container response matcher |
-| `agent_destinations` | central | `src/db/agent-destinations.ts`, migration 004 backfill | `writeDestinations()`, delivery ACL |
-| `pending_approvals` | central | `src/db/sessions.ts`, `src/onecli-approvals.ts` | admin-card delivery, sweep |
-| `unregistered_senders` | central | `src/db/dropped-messages.ts` | ops tooling |
+| `pending_questions` | central | `createPendingQuestion()` in `src/db/sessions.ts`, called from `src/delivery.ts` when an `ask_question` card is delivered | `src/modules/interactive/index.ts`, `getAskQuestionRender()` |
+| `pending_approvals` | central | `requestApproval()` in `src/modules/approvals/primitive.ts` | `src/modules/approvals/response-handler.ts`, `ncl approvals` |
+| `pending_sender_approvals` | central | `src/modules/permissions/db/pending-sender-approvals.ts` | `src/modules/permissions/index.ts` |
+| `pending_channel_approvals` | central | `src/modules/permissions/db/pending-channel-approvals.ts` | `src/modules/permissions/index.ts`, router |
+| `agent_destinations` | central | `src/modules/agent-to-agent/db/agent-destinations.ts` (`createMessagingGroupAgent()`, `create_agent`), `ncl destinations`, migration `agent-destinations` backfill | `writeDestinations()`, delivery ACL |
+| `unregistered_senders` | central | `src/db/dropped-messages.ts` | `ncl dropped-messages` |
+| `container_configs` | central | `src/db/container-configs.ts` (`src/group-init.ts`, `src/container-runner.ts`), `ncl groups config` | `src/container-config.ts`, `src/cli/dispatch.ts`, `src/claude-md-compose.ts` |
 | `chat_sdk_*` | central | `src/state-sqlite.ts` | Chat SDK bridge |
 | `schema_version` | central | `src/db/migrations/index.ts` | migration runner |
-| `messages_in` | inbound | `src/db/session-db.ts` | `container/agent-runner/src/db/messages-in.ts` |
+| `messages_in` | inbound | `src/db/session-db.ts`, `src/modules/scheduling/db.ts` | `container/agent-runner/src/db/messages-in.ts` |
 | `delivered` | inbound | `src/db/session-db.ts` (`markDelivered`) | container edit/reaction targeting |
-| `destinations` | inbound | `writeDestinations()` in `src/session-manager.ts` | container routing / ACL |
+| `destinations` | inbound | `writeDestinations()` in `src/modules/agent-to-agent/write-destinations.ts` | container routing / ACL |
 | `session_routing` | inbound | `writeSessionRouting()` in `src/session-manager.ts` | container `send_message` defaults |
 | `messages_out` | outbound | `container/agent-runner/src/db/messages-out.ts` | `src/delivery.ts` poll loop |
 | `processing_ack` | outbound | `container/agent-runner/src/db/messages-in.ts` | `src/host-sweep.ts` (`syncProcessingAcks`) |
 | `session_state` | outbound | `container/agent-runner/src/db/session-state.ts` | container on startup |
+| `container_state` | outbound | `container/agent-runner/src/db/connection.ts` (tool hooks in `container/agent-runner/src/providers/claude.ts`) | `src/host-sweep.ts` (`getContainerState`) |

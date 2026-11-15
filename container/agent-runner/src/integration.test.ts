@@ -22,13 +22,24 @@ afterEach(() => {
   closeSessionDb();
 });
 
-function insertMessage(id: string, content: object, opts?: { platformId?: string; channelType?: string; threadId?: string }) {
+function insertMessage(
+  id: string,
+  content: object,
+  opts?: { platformId?: string; channelType?: string; threadId?: string; trigger?: 0 | 1 },
+) {
   getInboundDb()
     .prepare(
-      `INSERT INTO messages_in (id, kind, timestamp, status, platform_id, channel_type, thread_id, content)
-       VALUES (?, 'chat', datetime('now'), 'pending', ?, ?, ?, ?)`,
+      `INSERT INTO messages_in (id, kind, timestamp, status, platform_id, channel_type, thread_id, trigger, content)
+       VALUES (?, 'chat', datetime('now'), 'pending', ?, ?, ?, ?, ?)`,
     )
-    .run(id, opts?.platformId ?? null, opts?.channelType ?? null, opts?.threadId ?? null, JSON.stringify(content));
+    .run(
+      id,
+      opts?.platformId ?? null,
+      opts?.channelType ?? null,
+      opts?.threadId ?? null,
+      opts?.trigger ?? 1,
+      JSON.stringify(content),
+    );
 }
 
 describe('poll loop integration', () => {
@@ -323,6 +334,31 @@ async function waitFor(condition: () => boolean, timeoutMs: number): Promise<voi
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+describe('poll loop — follow-ups during an active query', () => {
+  it('holds context-only follow-ups until a trigger message arrives', async () => {
+    insertMessage('m1', { sender: 'Alice', text: 'first' }, { platformId: 'chan-1', channelType: 'discord' });
+
+    // Earlier tests leave their loops running against the shared test DB, so
+    // assert on DB state rather than on which provider instance answered.
+    const provider = new MockProvider({}, () => '<message to="discord-test">reply</message>');
+    const controller = new AbortController();
+    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 6000);
+
+    await waitFor(() => getUndeliveredMessages().length === 1, 2000);
+    insertMessage('m2', { sender: 'Bob', text: 'just context' }, { platformId: 'chan-1', channelType: 'discord', trigger: 0 });
+    await sleep(1500);
+    expect(getUndeliveredMessages()).toHaveLength(1);
+    expect(getPendingMessages().map((m) => m.id)).toEqual(['m2']);
+
+    insertMessage('m3', { sender: 'Alice', text: 'second' }, { platformId: 'chan-1', channelType: 'discord' });
+    await waitFor(() => getUndeliveredMessages().length === 2, 2000);
+    controller.abort();
+    expect(getPendingMessages()).toHaveLength(0);
+
+    await loopPromise.catch(() => {});
+  });
+});
 
 describe('poll loop — provider error recovery', () => {
   it('writes error to outbound and continues loop on provider throw', async () => {

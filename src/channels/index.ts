@@ -1,10 +1,9 @@
 // Channel self-registration barrel.
 // Each import triggers the channel module's registerChannelAdapter() call.
 //
-// Main ships with one default channel — `cli`, the always-on local-terminal
-// channel. Other channel skills (/add-slack, /add-discord, /add-whatsapp,
-// ...) copy their module from the `channels` branch and append a
-// self-registration import below.
+// Only `cli` (the local-terminal channel) is wired by default. To add a
+// channel, write `src/channels/<name>.ts` and append its import below; see
+// docs/writing-a-channel.md.
 
 import './cli.js';
-import './slack.js';
+// import './slack.js'; // Slack (Socket Mode): uncomment and set SLACK_BOT_TOKEN + SLACK_APP_TOKEN

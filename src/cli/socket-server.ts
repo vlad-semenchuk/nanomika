@@ -17,6 +17,23 @@ import { DEFAULT_SOCKET_PATH } from './socket-client.js';
 
 let server: net.Server | null = null;
 
+// sockaddr_un.sun_path is 104 bytes on macOS and 108 on Linux, NUL included.
+const MAX_SOCKET_PATH_BYTES = process.platform === 'darwin' ? 103 : 107;
+
+/**
+ * Stop startup with a clear message when the checkout path is too long for a
+ * Unix socket. Without this, listen() fails with a misleading EADDRINUSE.
+ * `data/cli.sock` has the same length, so one check covers both sockets.
+ */
+export function ensureSocketPathFits(socketPath: string = DEFAULT_SOCKET_PATH): void {
+  const bytes = Buffer.byteLength(socketPath);
+  if (bytes <= MAX_SOCKET_PATH_BYTES) return;
+  console.error(`\nFATAL: the socket path is too long (${bytes} bytes, limit ${MAX_SOCKET_PATH_BYTES}):`);
+  console.error(`  ${socketPath}`);
+  console.error('Move the checkout to a shorter path (for example ~/nanomika) and start again.\n');
+  throw new Error(`Socket path too long (${bytes} > ${MAX_SOCKET_PATH_BYTES} bytes): ${socketPath}`);
+}
+
 export async function startCliServer(socketPath: string = DEFAULT_SOCKET_PATH): Promise<void> {
   // Stale-socket cleanup — a previous run that crashed may have left the
   // file behind, and net.createServer refuses to bind to an existing path.

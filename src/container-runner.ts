@@ -3,8 +3,9 @@
  * Spawns agent containers with session folder + agent group folder mounts.
  * The container runs the v2 agent-runner which polls the session DB.
  */
-import { ChildProcess, execSync, spawn } from 'child_process';
+import { ChildProcess, execFileSync, spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import {
@@ -13,17 +14,23 @@ import {
   CONTAINER_INSTALL_LABEL,
   CREDENTIAL_PROXY_PORT,
   DATA_DIR,
-  GROUPS_DIR,
   TIMEZONE,
 } from './config.js';
-import { materializeContainerJson } from './container-config.js';
+import { assertValidPackage, materializeContainerJson } from './container-config.js';
 import { getContainerConfig } from './db/container-configs.js';
 import { updateContainerConfigScalars } from './db/container-configs.js';
-import { CONTAINER_HOST_GATEWAY, CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
+import {
+  CONTAINER_HOST_GATEWAY,
+  CONTAINER_RUNTIME_BIN,
+  hostGatewayArgs,
+  readonlyMountArgs,
+  stopContainer,
+} from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
 import { composeGroupClaudeMd } from './claude-md-compose.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { getDb, hasTable } from './db/connection.js';
+import { resolveGroupFolderPath } from './group-folder.js';
 import { initGroupFilesystem } from './group-init.js';
 import { stopTypingRefresh } from './modules/typing/index.js';
 import { log } from './log.js';
@@ -51,7 +58,7 @@ const activeContainers = new Map<string, { process: ChildProcess; containerName:
 /**
  * In-flight wake promises, keyed by session id. Deduplicates concurrent
  * `wakeContainer` calls while the first spawn is still mid-setup (async
- * buildContainerArgs, OneCLI gateway apply, etc.) — otherwise a second
+ * buildContainerArgs, etc.) — otherwise a second
  * wake in that window passes the `activeContainers.has` check and spawns
  * a duplicate container against the same session directory, producing
  * racy double-replies.
@@ -73,7 +80,7 @@ export function isContainerRunning(sessionId: string): boolean {
  * The container runs the v2 agent-runner which polls the session DB.
  *
  * Contract: never throws. Returns `true` on successful spawn, `false` on
- * transient spawn failure (e.g. OneCLI gateway unreachable). Callers don't
+ * transient spawn failure (e.g. container runtime unavailable). Callers don't
  * need to wrap — the inbound row stays pending and host-sweep retries on
  * its next tick. Callers that care (e.g. the router's typing indicator)
  * can branch on the boolean.
@@ -247,7 +254,7 @@ function buildMounts(
 
   const mounts: VolumeMount[] = [];
   const sessDir = sessionDir(agentGroup.id, session.id);
-  const groupDir = path.resolve(GROUPS_DIR, agentGroup.folder);
+  const groupDir = resolveGroupFolderPath(agentGroup.folder);
 
   // Session folder at /workspace (contains inbound.db, outbound.db, outbox/, .claude/)
   mounts.push({ hostPath: sessDir, containerPath: '/workspace', readonly: false });
@@ -278,12 +285,6 @@ function buildMounts(
     mounts.push({ hostPath: fragmentsDir, containerPath: '/workspace/agent/.claude-fragments', readonly: true });
   }
 
-  // Global memory directory — always read-only.
-  const globalDir = path.join(GROUPS_DIR, 'global');
-  if (fs.existsSync(globalDir)) {
-    mounts.push({ hostPath: globalDir, containerPath: '/workspace/global', readonly: true });
-  }
-
   // Shared CLAUDE.md — read-only, imported by the composed entry point via
   // the `.claude-shared.md` symlink inside the group dir.
   const sharedClaudeMd = path.join(process.cwd(), 'container', 'CLAUDE.md');
@@ -311,7 +312,7 @@ function buildMounts(
     mounts.push(...validated);
   }
 
-  // Provider-contributed mounts (e.g. opencode-xdg)
+  // Provider-contributed mounts
   if (providerContribution.mounts) {
     mounts.push(...providerContribution.mounts);
   }
@@ -326,16 +327,21 @@ function buildMounts(
  */
 function syncSkillSymlinks(claudeDir: string, containerConfig: import('./container-config.js').ContainerConfig): void {
   const skillsDir = path.join(claudeDir, 'skills');
-  if (!fs.existsSync(skillsDir)) {
-    fs.mkdirSync(skillsDir, { recursive: true });
+  // claudeDir is writable by the container: never work inside a symlinked skills dir.
+  try {
+    const st = fs.lstatSync(skillsDir);
+    if (st.isSymbolicLink() || !st.isDirectory()) fs.rmSync(skillsDir, { force: true });
+  } catch {
+    // missing
   }
+  fs.mkdirSync(skillsDir, { recursive: true });
 
   // Determine desired skill set
   const projectRoot = process.cwd();
   const sharedSkillsDir = path.join(projectRoot, 'container', 'skills');
   let desired: string[];
   if (containerConfig.skills === 'all') {
-    // Recompute from shared dir — newly-added upstream skills appear automatically
+    // Recompute from shared dir — newly added skills appear automatically
     desired = fs.existsSync(sharedSkillsDir)
       ? fs.readdirSync(sharedSkillsDir).filter((e) => {
           try {
@@ -393,7 +399,7 @@ async function buildContainerArgs(
   // Everything NanoMika-specific is in container.json (read by runner at startup).
   args.push('-e', `TZ=${TIMEZONE}`);
 
-  // Provider-contributed env vars (e.g. XDG_DATA_HOME, OPENCODE_*, NO_PROXY).
+  // Provider-contributed env vars
   if (providerContribution.env) {
     for (const [key, value] of Object.entries(providerContribution.env)) {
       args.push('-e', `${key}=${value}`);
@@ -402,8 +408,8 @@ async function buildContainerArgs(
 
   // Credential proxy — containers route Anthropic API calls through the
   // host-side proxy (credential-proxy.ts), which injects the real key/token so
-  // secrets never enter the container. Slack auth runs host-side; Gmail reads
-  // its own mounted OAuth credentials.
+  // secrets never enter the container. Channel credentials (e.g. Slack) are
+  // used host-side only.
   args.push('-e', `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`);
   // Mirror the host's auth method with a placeholder value.
   //   API key mode: SDK sends x-api-key, proxy swaps in the real key.
@@ -436,14 +442,16 @@ async function buildContainerArgs(
     }
   }
 
-  // Override entrypoint: run v2 entry point directly via Bun (no tsc, no stdin).
-  args.push('--entrypoint', 'bash');
+  // tini as PID 1 reaps Chromium zombies and forwards SIGTERM to bun, so
+  // in-flight outbound.db writes finish. Stated here so a per-group image or
+  // a CONTAINER_IMAGE override with another entrypoint still runs the same way.
+  args.push('--entrypoint', '/usr/bin/tini');
 
   // Use per-agent-group image if one has been built, otherwise base image
   const imageTag = containerConfig.imageTag || CONTAINER_IMAGE;
   args.push(imageTag);
 
-  args.push('-c', 'exec bun run /app/src/index.ts');
+  args.push('--', 'bun', 'run', '/app/src/index.ts');
 
   return args;
 }
@@ -458,8 +466,10 @@ export async function buildAgentGroupImage(agentGroupId: string): Promise<void> 
   const aptPackages = JSON.parse(configRow.packages_apt) as string[];
   const npmPackages = JSON.parse(configRow.packages_npm) as string[];
   if (aptPackages.length === 0 && npmPackages.length === 0) {
-    throw new Error('No packages to install. Use install_packages first.');
+    throw new Error('No packages to install. Add one with `ncl groups config add-package` first.');
   }
+  for (const p of aptPackages) assertValidPackage('apt', p);
+  for (const p of npmPackages) assertValidPackage('npm', p);
 
   let dockerfile = `FROM ${CONTAINER_IMAGE}\nUSER root\n`;
   if (aptPackages.length > 0) {
@@ -479,17 +489,13 @@ export async function buildAgentGroupImage(agentGroupId: string): Promise<void> 
 
   log.info('Building per-agent-group image', { agentGroupId, imageTag, apt: aptPackages, npm: npmPackages });
 
-  // Write Dockerfile to temp file and build
-  const tmpDockerfile = path.join(DATA_DIR, `Dockerfile.${agentGroupId}`);
-  fs.writeFileSync(tmpDockerfile, dockerfile);
+  // Build from an empty temporary context so nothing on the host is sent to the build.
+  const buildDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nanomika-build-'));
+  fs.writeFileSync(path.join(buildDir, 'Dockerfile'), dockerfile);
   try {
-    execSync(`${CONTAINER_RUNTIME_BIN} build -t ${imageTag} -f ${tmpDockerfile} .`, {
-      cwd: DATA_DIR,
-      stdio: 'pipe',
-      timeout: 900_000,
-    });
+    execFileSync(CONTAINER_RUNTIME_BIN, ['build', '-t', imageTag, buildDir], { stdio: 'pipe', timeout: 900_000 });
   } finally {
-    fs.unlinkSync(tmpDockerfile);
+    fs.rmSync(buildDir, { recursive: true, force: true });
   }
 
   // Store the image tag in the DB

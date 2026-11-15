@@ -4,15 +4,17 @@ import { TIMEZONE, formatLocalTime } from './timezone.js';
 
 /**
  * Command categories for messages starting with '/'.
- * - admin: sender must be in NANOMIKA_ADMIN_USER_IDS
+ * - admin: owner/admin only. The host's command gate (src/command-gate.ts)
+ *   has already checked the sender's role before the message got here.
  * - filtered: silently drop (mark completed without processing)
  * - passthrough: pass raw to the agent (no XML wrapping)
  * - none: not a command — format normally
  */
 export type CommandCategory = 'admin' | 'filtered' | 'passthrough' | 'none';
 
-const ADMIN_COMMANDS = new Set(['/remote-control', '/clear', '/compact', '/context', '/cost', '/files']);
-const FILTERED_COMMANDS = new Set(['/help', '/login', '/logout', '/doctor', '/config', '/start']);
+// Same lists as src/command-gate.ts on the host.
+const ADMIN_COMMANDS = new Set(['/clear', '/compact', '/context', '/cost', '/files']);
+const FILTERED_COMMANDS = new Set(['/help', '/login', '/logout', '/doctor', '/config', '/remote-control']);
 
 export interface CommandInfo {
   category: CommandCategory;
@@ -25,9 +27,8 @@ export interface CommandInfo {
  * Categorize a message as a command or not.
  * Only applies to chat/chat-sdk messages.
  *
- * The extracted `senderId` is compared against `NANOMIKA_ADMIN_USER_IDS`
- * which stores ids in the namespaced form `<channel_type>:<raw>` (see
- * src/db/users.ts). chat-sdk-bridge serializes `author.userId` as a raw
+ * The extracted `senderId` uses the namespaced form `<channel_type>:<raw>`,
+ * the same form as user ids in the central DB. chat-sdk-bridge serializes `author.userId` as a raw
  * platform id with no prefix, so we prefix it here. If the id already
  * contains a `:` we assume it's pre-namespaced (non-chat-sdk adapters
  * that populate `senderId` directly) and leave it alone.
@@ -63,7 +64,7 @@ export function categorizeMessage(msg: MessageInRow): CommandInfo {
 export function isClearCommand(msg: MessageInRow): boolean {
   const content = parseContent(msg.content);
   const text = (content.text || '').trim();
-  return text.toLowerCase().startsWith('/clear');
+  return text.split(/\s/)[0].toLowerCase() === '/clear';
 }
 
 /**
@@ -120,8 +121,7 @@ export function extractRouting(messages: MessageInRow[]): RoutingContext {
  * Prepends a `<context timezone="<IANA>" />` header so the agent always knows
  * what timezone it's in — every timestamp it sees in message bodies is the
  * user's local time, and every time it produces (schedules, suggests) should
- * be interpreted as local time in that same zone. This header is v1 behavior
- * (src/v1/router.ts:20-22); dropping it led to misinterpretations where the
+ * be interpreted as local time in that same zone. Without this header the
  * agent scheduled tasks for the wrong hour.
  *
  * Strips routing fields — the agent never sees platform_id, channel_type, thread_id.
@@ -224,7 +224,7 @@ function formatSystemMessage(msg: MessageInRow): string {
 /**
  * Render the quoted original inside the <message> body.
  *
- * Matches v1 format (src/v1/router.ts:10-18): `<quoted_message from="X">Y</quoted_message>`.
+ * Format: `<quoted_message from="X">Y</quoted_message>`.
  * Requires BOTH sender and text — if only id is present the reply_to attribute
  * on the parent <message> carries the link without an inline preview.
  *
@@ -270,7 +270,7 @@ function escapeXml(str: string): string {
 
 /**
  * Strip `<internal>...</internal>` blocks from agent output, then trim.
- * Ported from v1 (src/v1/router.ts:25-27). Used to remove the agent's
+ * Used to remove the agent's
  * own scratchpad/reasoning before a reply goes out over a channel.
  */
 export function stripInternalTags(text: string): string {

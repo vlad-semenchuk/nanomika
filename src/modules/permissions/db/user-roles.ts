@@ -1,4 +1,4 @@
-import type { UserRole, UserRoleKind } from '../../../types.js';
+import type { UserRole } from '../../../types.js';
 import { getDb } from '../../../db/connection.js';
 
 /**
@@ -15,22 +15,6 @@ export function grantRole(row: UserRole): void {
        VALUES (@user_id, @role, @agent_group_id, @granted_by, @granted_at)`,
     )
     .run(row);
-}
-
-export function revokeRole(userId: string, role: UserRoleKind, agentGroupId: string | null): void {
-  if (agentGroupId === null) {
-    getDb()
-      .prepare('DELETE FROM user_roles WHERE user_id = ? AND role = ? AND agent_group_id IS NULL')
-      .run(userId, role);
-  } else {
-    getDb()
-      .prepare('DELETE FROM user_roles WHERE user_id = ? AND role = ? AND agent_group_id = ?')
-      .run(userId, role, agentGroupId);
-  }
-}
-
-export function getUserRoles(userId: string): UserRole[] {
-  return getDb().prepare('SELECT * FROM user_roles WHERE user_id = ?').all(userId) as UserRole[];
 }
 
 export function isOwner(userId: string): boolean {

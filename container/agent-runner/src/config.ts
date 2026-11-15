@@ -12,8 +12,6 @@ const CONFIG_PATH = '/workspace/agent/container.json';
 export interface RunnerConfig {
   provider: string;
   assistantName: string;
-  groupName: string;
-  agentGroupId: string;
   maxMessagesPerPrompt: number;
   mcpServers: Record<string, { command: string; args: string[]; env: Record<string, string> }>;
   model?: string;
@@ -41,8 +39,6 @@ export function loadConfig(): RunnerConfig {
   _config = {
     provider: (raw.provider as string) || 'claude',
     assistantName: (raw.assistantName as string) || '',
-    groupName: (raw.groupName as string) || '',
-    agentGroupId: (raw.agentGroupId as string) || '',
     maxMessagesPerPrompt: (raw.maxMessagesPerPrompt as number) || DEFAULT_MAX_MESSAGES,
     mcpServers: (raw.mcpServers as RunnerConfig['mcpServers']) || {},
     model: (raw.model as string) || undefined,

@@ -1,8 +1,9 @@
-import type { McpServerConfig } from '../../container-config.js';
+import { assertValidPackage, type McpServerConfig } from '../../container-config.js';
 import { buildAgentGroupImage, killContainer, wakeContainer } from '../../container-runner.js';
 import { restartAgentGroupContainers } from '../../container-restart.js';
 import { getDb, hasTable } from '../../db/connection.js';
 import { getSession } from '../../db/sessions.js';
+import { assertValidGroupFolder } from '../../group-folder.js';
 import { writeSessionMessage } from '../../session-manager.js';
 import {
   getContainerConfig,
@@ -53,8 +54,9 @@ registerResource({
       name: 'folder',
       type: 'string',
       description:
-        'Directory name under groups/ on the host. Must be unique. Contains CLAUDE.md, skills/, and container.json. Cannot be changed after creation.',
+        'Directory name under groups/ on the host: letters, digits, "-" and "_", up to 64 characters. Must be unique. Contains CLAUDE.md, skills/, and container.json. Cannot be changed after creation.',
       required: true,
+      validate: (v) => assertValidGroupFolder(String(v)),
     },
     { name: 'created_at', type: 'string', description: 'Auto-set.', generated: true },
   ],
@@ -226,7 +228,14 @@ registerResource({
             'provider' | 'model' | 'effort' | 'image_tag' | 'assistant_name' | 'max_messages_per_prompt' | 'cli_scope'
           >
         > = {};
-        if (args.provider !== undefined) updates.provider = args.provider as string;
+        if (args.provider !== undefined) {
+          // An unknown name would crash every container at startup. `mock`
+          // is the test provider; it answers with canned text.
+          if (!['claude', 'mock'].includes(String(args.provider))) {
+            throw new Error('--provider must be one of: claude, mock');
+          }
+          updates.provider = args.provider as string;
+        }
         if (args.model !== undefined) updates.model = args.model as string;
         if (args.effort !== undefined) updates.effort = args.effort as string;
         if (args.image_tag !== undefined) updates.image_tag = args.image_tag as string;
@@ -315,6 +324,8 @@ registerResource({
         const apt = args.apt as string | undefined;
         const npm = args.npm as string | undefined;
         if (!apt && !npm) throw new Error('Provide --apt <pkg> or --npm <pkg>');
+        if (apt) assertValidPackage('apt', apt);
+        if (npm) assertValidPackage('npm', npm);
 
         if (apt) {
           const existing = JSON.parse(row.packages_apt) as string[];
@@ -333,7 +344,7 @@ registerResource({
 
         return {
           added: { apt: apt || null, npm: npm || null },
-          note: 'Image rebuild required for packages to take effect. Use install_packages from the agent or rebuild manually.',
+          note: 'Image rebuild required for packages to take effect: run `ncl groups restart --rebuild`.',
         };
       },
     },

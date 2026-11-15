@@ -1,6 +1,6 @@
 ---
 name: slack-formatting
-description: Format messages for Slack using mrkdwn syntax. Use when responding to Slack channels (folder starts with "slack_" or JID contains slack identifiers).
+description: Format messages for Slack using mrkdwn syntax. Use when the chat you are replying to is on Slack.
 ---
 
 # Slack Message Formatting (mrkdwn)
@@ -9,9 +9,11 @@ When responding to Slack channels, use Slack's mrkdwn syntax instead of standard
 
 ## How to detect Slack context
 
-Check your group folder name or workspace path:
-- Folder starts with `slack_` (e.g., `slack_engineering`, `slack_general`)
-- Or check `/workspace/group/` path for `slack_` prefix
+You are not told which platform a message came from, so look for signs in the conversation:
+- Incoming messages contain Slack-style mentions or links (`<@U1234567890>`, `<#C1234567890>`, `<https://…|text>`)
+- Your instructions (`CLAUDE.local.md`) or the user say the chat is on Slack
+
+If nothing points to Slack, use the normal formatting for your replies.
 
 ## Formatting reference
 

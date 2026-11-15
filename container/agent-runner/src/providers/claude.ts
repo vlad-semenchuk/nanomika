@@ -37,7 +37,7 @@ const SDK_DISALLOWED_TOOLS = [
 
 // Tool allowlist for NanoMika agent containers. MCP-tool entries are derived
 // at the call site from the registered `mcpServers` map so that any server
-// added via `add_mcp_server` (or wired in container.json directly) is
+// wired in the group's container config is
 // reachable to the agent — without this, the SDK's allowedTools filter
 // silently drops every MCP namespace not listed here.
 const TOOL_ALLOWLIST = [

@@ -7,8 +7,7 @@
  *   - Uses heartbeat file mtime for liveness (never polls DB for it)
  *   - Never writes to outbound.db — preserves single-writer-per-file invariant
  *
- * Stuck / idle detection (replaces the old IDLE_TIMEOUT setTimeout + 10-min
- * heartbeat threshold):
+ * Stuck / idle detection:
  *
  *   If the container isn't running and there are 'processing' rows left over
  *   (e.g. it crashed mid-turn) → reset them to pending with backoff +
@@ -37,6 +36,7 @@ import {
   getContainerState,
   getMessageForRetry,
   getProcessingClaims,
+  isMidWriteError,
   markMessageFailed,
   retryWithBackoff,
   syncProcessingAcks,
@@ -135,13 +135,34 @@ async function sweep(): Promise<void> {
   try {
     const sessions = getActiveSessions();
     for (const session of sessions) {
-      await sweepSession(session);
+      await sweepSessionOrWait(session);
     }
   } catch (err) {
     log.error('Host sweep error', { err });
   }
 
   setTimeout(sweep, SWEEP_INTERVAL_MS);
+}
+
+/**
+ * Sweep one session. If outbound.db is in the middle of a write, wait for the
+ * next sweep, or roll the write back when its container is gone (a container
+ * killed mid-write would otherwise block the session until the next start).
+ */
+export async function sweepSessionOrWait(session: Session): Promise<void> {
+  try {
+    await sweepSession(session);
+  } catch (err) {
+    if (!isMidWriteError(err)) throw err;
+    if (isContainerRunning(session.id)) {
+      log.debug('outbound.db is being written, retrying next sweep', { sessionId: session.id });
+      return;
+    }
+    // Opening read-write rolls back the journal the stopped container left.
+    const db = openOutboundDbRw(session.agent_group_id, session.id);
+    db.close();
+    log.warn('Rolled back an unfinished outbound.db write from a stopped container', { sessionId: session.id });
+  }
 }
 
 async function sweepSession(session: Session): Promise<void> {
@@ -180,8 +201,8 @@ async function sweepSession(session: Session): Promise<void> {
     const dueCount = countDueMessages(inDb);
     if (dueCount > 0 && !isContainerRunning(session.id)) {
       log.info('Waking container for due messages', { sessionId: session.id, count: dueCount });
-      // wakeContainer never throws — transient spawn failures (OneCLI down,
-      // etc.) return false and leave messages pending for the next tick.
+      // wakeContainer never throws — transient spawn failures (container runtime
+      // down, etc.) return false and leave messages pending for the next tick.
       await wakeContainer(session);
     }
 

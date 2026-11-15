@@ -1,5 +1,6 @@
 onlyBuiltDependencies:
+  - better-sqlite3
   - esbuild
 
-pnpm:
-  minimumReleaseAge: 4320
+# Minutes a version must have been on the registry before pnpm resolves it (3 days).
+minimumReleaseAge: 4320

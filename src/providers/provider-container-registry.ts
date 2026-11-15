@@ -11,7 +11,7 @@
  * this registry at all — the lookup returns `undefined` and the spawn path
  * proceeds with only the default mounts and env.
  *
- * Skills add a new provider's host config by creating `src/providers/<name>.ts`
+ * Add a new provider's host config by creating `src/providers/<name>.ts`
  * with a top-level `registerProviderContainerConfig(...)` call, then appending
  * `import './<name>.js';` to `src/providers/index.ts` (the barrel).
  */
@@ -51,8 +51,4 @@ export function registerProviderContainerConfig(name: string, fn: ProviderContai
 
 export function getProviderContainerConfig(name: string): ProviderContainerConfigFn | undefined {
   return registry.get(name);
-}
-
-export function listProviderContainerConfigNames(): string[] {
-  return [...registry.keys()];
 }

@@ -38,9 +38,7 @@ export {
   deletePendingQuestion,
   createPendingApproval,
   getPendingApproval,
-  updatePendingApprovalStatus,
   deletePendingApproval,
-  getPendingApprovalsByAction,
 } from './sessions.js';
 export {
   getContainerConfig,

@@ -18,11 +18,3 @@ export function getUserDm(userId: string, channelType: string): UserDm | undefin
     | UserDm
     | undefined;
 }
-
-export function getUserDmsForUser(userId: string): UserDm[] {
-  return getDb().prepare('SELECT * FROM user_dms WHERE user_id = ?').all(userId) as UserDm[];
-}
-
-export function deleteUserDm(userId: string, channelType: string): void {
-  getDb().prepare('DELETE FROM user_dms WHERE user_id = ? AND channel_type = ?').run(userId, channelType);
-}

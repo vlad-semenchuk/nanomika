@@ -145,7 +145,7 @@ export async function requestChannelApproval(input: RequestChannelApprovalInput)
 
   const agentGroups = getAllAgentGroups();
   if (agentGroups.length === 0) {
-    log.warn('Channel registration skipped — no agent groups configured. Run /init-first-agent.', {
+    log.warn('Channel registration skipped — no agent groups configured. Create one with `ncl groups create`.', {
       messagingGroupId,
     });
     return;

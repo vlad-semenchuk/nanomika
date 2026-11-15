@@ -443,4 +443,56 @@ describe('routeAgentMessage return-path', () => {
     expect(fs.existsSync(targetPath)).toBe(true);
     expect(fs.readFileSync(targetPath, 'utf-8')).toBe('fake-pdf-bytes');
   });
+
+  it('drops admin slash commands sent to another agent', async () => {
+    await routeAgentMessage(
+      { id: 'm-clear', platform_id: B, content: JSON.stringify({ text: '/clear' }), in_reply_to: null },
+      S1,
+    );
+    expect(readInbound(B, SB.id)).toHaveLength(0);
+  });
+
+  describe('file forwarding refuses to leave the session folder', () => {
+    const SECRET = path.join(TEST_DIR, 'secret-dir');
+    beforeEach(() => {
+      fs.mkdirSync(SECRET, { recursive: true });
+      fs.writeFileSync(path.join(SECRET, '.env'), 'TOKEN=real');
+    });
+    const route = (id: string, files: string[]) =>
+      routeAgentMessage({ id, platform_id: B, content: JSON.stringify({ text: 'x', files }), in_reply_to: null }, S1);
+    const attachments = () => JSON.parse(readInbound(B, SB.id)[0].content).attachments ?? [];
+
+    it('rejects a message id that walks out of the outbox', async () => {
+      await route('../../../../secret-dir', ['.env']);
+      expect(attachments()).toHaveLength(0);
+    });
+
+    it('rejects a symlinked outbox folder', async () => {
+      const outbox = path.join(sessionDir(A, S1.id), 'outbox');
+      fs.rmSync(outbox, { recursive: true, force: true });
+      fs.symlinkSync(TEST_DIR, outbox);
+      await route('secret-dir', ['.env']);
+      expect(attachments()).toHaveLength(0);
+    });
+
+    it('rejects a symlinked file in the outbox', async () => {
+      const dir = path.join(sessionDir(A, S1.id), 'outbox', 'm1');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.symlinkSync(path.join(SECRET, '.env'), path.join(dir, 'leak.txt'));
+      await route('m1', ['leak.txt']);
+      expect(attachments()).toHaveLength(0);
+    });
+
+    it('does not write through a symlinked target inbox', async () => {
+      const inbox = path.join(sessionDir(B, SB.id), 'inbox');
+      fs.rmSync(inbox, { recursive: true, force: true });
+      fs.symlinkSync(SECRET, inbox);
+      const dir = path.join(sessionDir(A, S1.id), 'outbox', 'm2');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'planted.md'), 'evil');
+      await route('m2', ['planted.md']);
+      expect(attachments()).toHaveLength(0);
+      expect(fs.readdirSync(SECRET)).toEqual(['.env']);
+    });
+  });
 });

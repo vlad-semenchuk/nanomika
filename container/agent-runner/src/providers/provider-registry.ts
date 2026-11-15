@@ -27,7 +27,3 @@ export function getProviderFactory(name: string): ProviderFactory {
   }
   return factory;
 }
-
-export function listProviderNames(): string[] {
-  return [...registry.keys()];
-}

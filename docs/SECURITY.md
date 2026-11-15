@@ -1,161 +1,130 @@
-# NanoMika Security Model
+# Security model
 
-## Trust Model
+NanoMika is built for one person running it on their own machine. This page says what is protected, how, and what is not.
 
-| Entity | Trust Level | Rationale |
-|--------|-------------|-----------|
-| Main group | Trusted | Private self-chat, admin control |
-| Non-main groups | Untrusted | Other users may be malicious |
-| Container agents | Sandboxed | Isolated execution environment |
-| Incoming messages | User input | Potential prompt injection |
+## Who is trusted
 
-## Security Boundaries
+| Party | Trust | Why |
+|---|---|---|
+| The operator (the OS user who runs the host) | Full | Owns the machine, `.env`, the databases and the local sockets |
+| Owners and admins (`user_roles`) | High | Approve what agents and unknown senders may do |
+| Members of an agent group | Limited | May talk to that agent. Cannot approve anything. |
+| Unknown senders | None | Dropped or held for approval, depending on the chat's policy |
+| Agents (code in containers) | Sandboxed | Act on message content, which can carry prompt injection |
 
-### 1. Container Isolation (Primary Boundary)
+## 1. Container isolation
 
-Agents execute in containers (lightweight Linux VMs), providing:
-- **Process isolation** - Container processes cannot affect the host
-- **Filesystem isolation** - Only explicitly mounted directories are visible
-- **Non-root execution** - Runs as unprivileged `node` user (uid 1000)
-- **Ephemeral containers** - Fresh environment per invocation (`--rm`)
+Every session runs in its own Docker container, started with `--rm` and removed when it stops. This is the main boundary: an agent can touch only what is mounted into its container.
 
-This is the primary security boundary. Rather than relying on application-level permission checks, the attack surface is limited by what's mounted.
+- Processes run as the unprivileged `node` user, or as the host user's uid when that is not 0 or 1000, so files created in mounted folders belong to you.
+- The container gets no host environment. It receives `TZ`, the proxy address and a placeholder credential.
+- Containers are labelled with the install they belong to. On start the host removes only its own leftover containers.
 
-### 2. Mount Security
+Mounted into every container:
 
-**External Allowlist** - Mount permissions stored at `~/.config/nanomika/mount-allowlist.json`, which is:
-- Outside project root
-- Never mounted into containers
-- Cannot be modified by agents
+| Host path | In the container | Access |
+|---|---|---|
+| `data/v2-sessions/<agent-group-id>/<session-id>/` | `/workspace` | read-write |
+| `groups/<folder>/` | `/workspace/agent` | read-write |
+| `groups/<folder>/container.json`, composed `CLAUDE.md`, instruction fragments | under `/workspace/agent` | read-only |
+| `data/v2-sessions/<agent-group-id>/.claude-shared/` | `/home/node/.claude` | read-write |
+| `container/agent-runner/src/` | `/app/src` | read-only |
+| `container/skills/` | `/app/skills` | read-only |
+| `container/CLAUDE.md` | `/app/CLAUDE.md` | read-only |
 
-**Default Blocked Patterns:**
-```
-.ssh, .gnupg, .aws, .azure, .gcloud, .kube, .docker,
-credentials, .env, .netrc, .npmrc, id_rsa, id_ed25519,
-private_key, .secret
-```
+The project root, `.env`, `data/v2.db` and other agents' folders are never mounted.
 
-**Protections:**
-- Symlink resolution before validation (prevents traversal attacks)
-- Container path validation (rejects `..` and absolute paths)
-- `nonMainReadOnly` option forces read-only for non-main groups
+Docker isolation is weaker than a virtual machine. A container escape in Docker or the kernel would defeat it.
 
-**Read-Only Project Root:**
+## 2. Extra mounts
 
-The main group's project root is mounted read-only. Writable paths the agent needs (store, group folder, IPC, `.claude/`) are mounted separately. This prevents the agent from modifying host application code (`src/`, `dist/`, `package.json`, etc.) which would bypass the sandbox entirely on next restart. The `store/` directory is mounted read-write so the main agent can access the SQLite database directly.
+An agent group can be given additional host folders. Each one is checked against an allowlist at `~/.config/nanomika/mount-allowlist.json`.
 
-### 3. Session Isolation
+- The file is outside the project and is never mounted, so an agent cannot change it.
+- Without the file, every extra mount is refused.
+- A path must be inside one of the `allowedRoots`. Symlinks are resolved before the check.
+- A root with `allowReadWrite: false` is always mounted read-only.
+- Paths containing any of these are refused even inside an allowed root: `.ssh`, `.gnupg`, `.gpg`, `.aws`, `.azure`, `.gcloud`, `.kube`, `.docker`, `credentials`, `.env`, `.netrc`, `.npmrc`, `.pypirc`, `id_rsa`, `id_ed25519`, `private_key`, `.secret`, plus your own `blockedPatterns`.
+- These checks look at the folder being mounted, not at the files inside it. Mounting a folder that contains a `.env` gives the agent that file.
 
-Each group has isolated Claude sessions at `data/sessions/{group}/.claude/`:
-- Groups cannot see other groups' conversation history
-- Session data includes full message history and file contents read
-- Prevents cross-group information disclosure
+See [config-examples/mount-allowlist.json](../config-examples/mount-allowlist.json).
 
-### 4. IPC Authorization
+## 3. Credentials
 
-Messages and task operations are verified against group identity:
+The Anthropic credential is stored only in `.env`.
 
-| Operation | Main Group | Non-Main Group |
-|-----------|------------|----------------|
-| Send message to own chat | ✓ | ✓ |
-| Send message to other chats | ✓ | ✗ |
-| Schedule task for self | ✓ | ✓ |
-| Schedule task for others | ✓ | ✗ |
-| View all tasks | ✓ | Own only |
-| Manage other groups | ✓ | ✗ |
+- Only the credential proxy (`src/credential-proxy.ts`) reads it, straight from the file. It is not loaded into the host's process environment, so child processes do not inherit it.
+- A container gets `ANTHROPIC_BASE_URL` pointing at the proxy and a placeholder key or token. The proxy swaps the placeholder for the real credential on each request to the API.
+- You can check this: `docker inspect <container>` shows only the placeholder.
 
-### 5. Credential Isolation (OneCLI Agent Vault)
+The proxy has no authentication. Anything that can reach its port can make API calls with your credential, though it cannot read the credential itself.
 
-Real API credentials **never enter containers**. NanoMika uses [OneCLI's Agent Vault](https://github.com/onecli/onecli) to proxy outbound requests and inject credentials at the gateway level.
+- On macOS and WSL the proxy listens on `127.0.0.1`.
+- On Linux it listens on the `docker0` bridge address, reachable from containers and the host only. If that interface is not found, the host does not start until you set `CREDENTIAL_PROXY_HOST` to an address your containers can reach.
 
-**How it works:**
-1. Credentials are registered once with `onecli secrets create`, stored and managed by OneCLI
-2. When NanoMika spawns a container, it calls `applyContainerConfig()` to route outbound HTTPS through the OneCLI gateway
-3. The gateway matches requests by host and path, injects the real credential, and forwards
-4. Agents cannot discover real credentials — not in environment, stdin, files, or `/proc`
+Agents can call the Anthropic API through the proxy without limit. NanoMika sets no spending cap. Set one on the credential itself.
 
-**Per-agent policies:**
-Each NanoMika group gets its own OneCLI agent identity. This allows different credential policies per group (e.g. your sales agent vs. support agent). OneCLI supports rate limits, and time-bound access and approval flows are on the roadmap.
+Channel tokens, such as the Slack tokens, are also read from `.env` and are used only by the host.
 
-**NOT Mounted:**
-- Channel auth sessions (`store/auth/`) — host only
-- Mount allowlist — external, never mounted
-- Any credentials matching blocked patterns
-- `.env` is shadowed with `/dev/null` in the project root mount
+## 4. Local sockets
 
-## Privilege Comparison
+The host listens on two Unix sockets under `data/`, both with mode `0600`:
 
-| Capability | Main Group | Non-Main Group |
-|------------|------------|----------------|
-| Project root access | `/workspace/project` (ro) | None |
-| Store (SQLite DB) | `/workspace/project/store` (rw) | None |
-| Group folder | `/workspace/group` (rw) | `/workspace/group` (rw) |
-| Global memory | Implicit via project | `/workspace/global` (ro) |
-| Additional mounts | Configurable | Read-only unless allowed |
-| Network access | Unrestricted | Unrestricted |
-| MCP tools | All | All |
+- `data/cli.sock`: the terminal chat. Messages from it are the user `cli:local`, who is the owner on a fresh install.
+- `data/ncl.sock`: the admin CLI. Commands from it run without approval.
 
-## Security Architecture Diagram
+Any process running as your OS user can connect to them and act as the owner. Other users on the machine cannot.
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                        UNTRUSTED ZONE                             │
-│  Incoming Messages (potentially malicious)                         │
-└────────────────────────────────┬─────────────────────────────────┘
-                                 │
-                                 ▼ Trigger check, input escaping
-┌──────────────────────────────────────────────────────────────────┐
-│                     HOST PROCESS (TRUSTED)                        │
-│  • Message routing                                                │
-│  • IPC authorization                                              │
-│  • Mount validation (external allowlist)                          │
-│  • Container lifecycle                                            │
-│  • OneCLI Agent Vault (injects credentials, enforces policies)   │
-└────────────────────────────────┬─────────────────────────────────┘
-                                 │
-                                 ▼ Explicit mounts only, no secrets
-┌──────────────────────────────────────────────────────────────────┐
-│                CONTAINER (ISOLATED/SANDBOXED)                     │
-│  • Agent execution                                                │
-│  • Bash commands (sandboxed)                                      │
-│  • File operations (limited to mounts)                            │
-│  • API calls routed through OneCLI Agent Vault                   │
-│  • No real credentials in environment or filesystem              │
-└──────────────────────────────────────────────────────────────────┘
-```
+## 5. Who may talk to an agent
 
-## Supply Chain Security (pnpm)
+Each chat (messaging group) has a policy for senders the agent does not know:
 
-NanoMika uses pnpm with two supply chain defenses configured in `pnpm-workspace.yaml`:
+| `unknown_sender_policy` | Effect |
+|---|---|
+| `strict` | The message is dropped |
+| `request_approval` | The message is held and an owner or admin is asked to admit the sender |
+| `public` | Anyone in the chat is accepted |
 
-### Minimum Release Age
+A sender is known when they are an owner, an admin (global or for that agent group) or a member of the agent group. A wiring can also require known senders in a `public` chat (`sender_scope: known`).
 
-`minimumReleaseAge: 4320` (3 days). pnpm will refuse to resolve any package version published less than 3 days ago. This defends against typosquatting and compromised maintainer accounts — most malicious publishes are detected and pulled within 72 hours.
+A message from a chat that is not wired to any agent is never delivered to an agent. If it is a mention or direct message, an owner is asked whether to connect the chat.
 
-**Excluding a package from the release age gate** (`minimumReleaseAgeExclude`):
+Every dropped message is recorded with a reason: `pnpm run ncl dropped-messages list`.
 
-This should be rare. When a zero-day fix or critical dependency requires an immediate update:
+Slash commands are checked on the host before they reach a container (`src/command-gate.ts`). `/clear`, `/compact`, `/context`, `/cost` and `/files` need an owner or admin. `/help`, `/login`, `/logout`, `/doctor`, `/config` and `/remote-control` are dropped. A slash command one agent sends to another gets the same check, and an agent is never an owner or admin.
 
-1. The exclusion must be reviewed and approved by a human maintainer
-2. The entry must pin the **exact version** being excluded — never a range or wildcard
-   ```yaml
-   minimumReleaseAgeExclude:
-     some-package: "1.2.3"  # Approved by @user, 2026-04-14 — CVE-XXXX-YYYY fix
-   ```
-3. The exclusion should be removed once the version ages past the threshold (i.e. after 3 days)
-4. Automated agents (Claude, CI bots) must never add exclusions without human sign-off
+## 6. What an agent can change
 
-### Build Script Allowlist
+An agent can use `ncl` from inside its container, limited by the group's `cli_scope`:
 
-`onlyBuiltDependencies` restricts which packages can execute install/postinstall scripts. Only packages on this list are permitted to run build scripts during `pnpm install`. Currently allowed:
+| `cli_scope` | Effect |
+|---|---|
+| `disabled` | No `ncl` access |
+| `group` (default) | Only `groups`, `sessions`, `destinations` and `members`, and only for its own agent group. It cannot change `cli_scope`. |
+| `global` | All resources |
 
-- `better-sqlite3` — compiles native SQLite bindings
-- `esbuild` — downloads platform-specific binary
-- `protobufjs` — generates protobuf bindings (used by Baileys/libsignal)
-- `sharp` — downloads platform-specific image processing binary
+Read operations run directly. Operations that change something (configuration, packages, MCP servers, wirings, roles) are sent to an owner or admin as an approval request showing the exact command. Nothing changes until it is approved, and only an owner or admin can approve: a click from anyone else is ignored.
 
-Adding a package to this list requires human approval — build scripts execute arbitrary code with the installing user's permissions.
+An agent can send messages only to its destinations, and can always reply to the chat a message came from.
 
-### `.npmrc` Safety Net
+An agent can create another agent with the `create_agent` tool without approval. The new agent has its own folder and container and is reachable only from the agent that created it.
 
-The `.npmrc` file contains `minReleaseAge=3d` as a fallback. The authoritative setting is in `pnpm-workspace.yaml`, but `.npmrc` provides defense-in-depth if npm is ever invoked directly (e.g. by a tool that doesn't respect pnpm).
+Files an agent sends, to a chat or to another agent, are read from the session's outbox folder. Symlinks and names that point outside the folder are refused, and attachment names are sanitised before anything is written to disk.
+
+## 7. Network
+
+- Containers have unrestricted outbound network access. An agent that reads untrusted content can be tricked into sending data it can see to a third party. Mount only what the agent needs.
+- The credential proxy listens on port 3001 (`CREDENTIAL_PROXY_PORT`), as described above.
+- The Slack adapter in Socket Mode opens no listening port. In webhook mode (no `SLACK_APP_TOKEN`) the host listens on `0.0.0.0:3000` (`WEBHOOK_PORT`), and the Slack adapter uses `SLACK_SIGNING_SECRET` to verify incoming requests.
+
+## Not protected
+
+- **Prompt injection.** Message text, web pages and files can instruct the agent. Isolation limits the damage but does not prevent the attempt.
+- **Data in the agent's folder.** Everything in `groups/<folder>/` and in the session folder is readable and writable by that agent.
+- **Other processes of your OS user.** They can read `.env`, the databases and the sockets.
+- **Races in the session folder.** The host refuses symlinks in a session folder before it reads or writes there, and checks again after reading. An agent that swaps a folder for a symlink between the check and the write could still redirect that write. Node has no API that closes this gap fully.
+- **Linux.** The Linux code paths have not been tested in this release.
+
+## Reporting a vulnerability
+
+Please report security problems privately through GitHub: on the repository page open **Security → Report a vulnerability**. Do not open a public issue for them.

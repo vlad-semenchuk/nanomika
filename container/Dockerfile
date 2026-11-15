@@ -20,10 +20,8 @@ ARG INSTALL_CJK_FONTS=false
 # mean every rebuild silently picks up the latest and can break in lockstep
 # across all users.
 ARG CLAUDE_CODE_VERSION=2.1.128
-ARG AGENT_BROWSER_VERSION=latest
+ARG AGENT_BROWSER_VERSION=0.42.0
 ARG BUN_VERSION=1.3.12
-ARG GMAIL_MCP_VERSION=1.1.11
-ARG CALENDAR_MCP_VERSION=2.6.1
 
 # ---- System dependencies -----------------------------------------------------
 # tini: correct PID 1 / signal forwarding so outbound.db writes finalize on
@@ -110,29 +108,20 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
 RUN --mount=type=cache,target=/root/.cache/pnpm \
     pnpm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
 
-RUN --mount=type=cache,target=/root/.cache/pnpm \
-    pnpm install -g \
-        "@gongrzhe/server-gmail-autoauth-mcp@${GMAIL_MCP_VERSION}" \
-        "@cocal/google-calendar-mcp@${CALENDAR_MCP_VERSION}" \
-        "zod-to-json-schema@3.22.5"
-
 # ---- ncl CLI wrapper ----------------------------------------------------------
 # Actual script lives in the mounted source at /app/src/cli/ncl.ts.
 RUN printf '#!/bin/sh\nexec bun /app/src/cli/ncl.ts "$@"\n' > /usr/local/bin/ncl && \
     chmod +x /usr/local/bin/ncl
 
-# ---- Entrypoint --------------------------------------------------------------
-COPY entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
-
 # ---- Workspace + permissions -------------------------------------------------
-RUN mkdir -p /workspace/group /workspace/extra && \
+RUN mkdir -p /workspace/agent /workspace/extra && \
     chown -R node:node /workspace && \
     chmod 777 /home/node
 
 USER node
-WORKDIR /workspace/group
+WORKDIR /workspace/agent
 
-# tini is PID 1, reaps zombies, forwards signals cleanly. entrypoint.sh does
-# `exec bun ...` so bun runs as tini's direct child.
-ENTRYPOINT ["/usr/bin/tini", "--", "/app/entrypoint.sh"]
+# tini is PID 1, reaps zombies, forwards signals cleanly; bun is its direct
+# child. The host spawns sessions with the same command (src/container-runner.ts).
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["bun", "run", "/app/src/index.ts"]

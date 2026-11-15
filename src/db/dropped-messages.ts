@@ -1,18 +1,5 @@
 import { getDb } from './connection.js';
 
-export interface UnregisteredSender {
-  channel_type: string;
-  platform_id: string;
-  user_id: string | null;
-  sender_name: string | null;
-  reason: string;
-  messaging_group_id: string | null;
-  agent_group_id: string | null;
-  message_count: number;
-  first_seen: string;
-  last_seen: string;
-}
-
 export function recordDroppedMessage(msg: {
   channel_type: string;
   platform_id: string;
@@ -35,10 +22,4 @@ export function recordDroppedMessage(msg: {
          last_seen = excluded.last_seen`,
     )
     .run({ ...msg, now });
-}
-
-export function getUnregisteredSenders(limit = 50): UnregisteredSender[] {
-  return getDb()
-    .prepare('SELECT * FROM unregistered_senders ORDER BY last_seen DESC LIMIT ?')
-    .all(limit) as UnregisteredSender[];
 }

@@ -11,7 +11,7 @@ vi.mock('./log.js', () => ({
   log: { info: vi.fn(), error: vi.fn(), debug: vi.fn(), warn: vi.fn() },
 }));
 
-import { startCredentialProxy } from './credential-proxy.js';
+import { ensureCredentialsConfigured, startCredentialProxy } from './credential-proxy.js';
 
 function makeRequest(
   port: number,
@@ -23,20 +23,17 @@ function makeRequest(
   headers: http.IncomingHttpHeaders;
 }> {
   return new Promise((resolve, reject) => {
-    const req = http.request(
-      { ...options, hostname: '127.0.0.1', port },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on('data', (c) => chunks.push(c));
-        res.on('end', () => {
-          resolve({
-            statusCode: res.statusCode!,
-            body: Buffer.concat(chunks).toString(),
-            headers: res.headers,
-          });
+    const req = http.request({ ...options, hostname: '127.0.0.1', port }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        resolve({
+          statusCode: res.statusCode!,
+          body: Buffer.concat(chunks).toString(),
+          headers: res.headers,
         });
-      },
-    );
+      });
+    });
     req.on('error', reject);
     req.write(body);
     req.end();
@@ -49,18 +46,18 @@ describe('credential-proxy', () => {
   let proxyPort: number;
   let upstreamPort: number;
   let lastUpstreamHeaders: http.IncomingHttpHeaders;
+  let lastUpstreamUrl: string | undefined;
 
   beforeEach(async () => {
     lastUpstreamHeaders = {};
 
     upstreamServer = http.createServer((req, res) => {
       lastUpstreamHeaders = { ...req.headers };
+      lastUpstreamUrl = req.url;
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true }));
     });
-    await new Promise<void>((resolve) =>
-      upstreamServer.listen(0, '127.0.0.1', resolve),
-    );
+    await new Promise<void>((resolve) => upstreamServer.listen(0, '127.0.0.1', resolve));
     upstreamPort = (upstreamServer.address() as AddressInfo).port;
   });
 
@@ -115,9 +112,7 @@ describe('credential-proxy', () => {
       '{}',
     );
 
-    expect(lastUpstreamHeaders['authorization']).toBe(
-      'Bearer real-oauth-token',
-    );
+    expect(lastUpstreamHeaders['authorization']).toBe('Bearer real-oauth-token');
   });
 
   it('OAuth mode does not inject Authorization when container omits it', async () => {
@@ -141,6 +136,17 @@ describe('credential-proxy', () => {
 
     expect(lastUpstreamHeaders['x-api-key']).toBe('temp-key-from-exchange');
     expect(lastUpstreamHeaders['authorization']).toBeUndefined();
+  });
+
+  it('keeps the path prefix of ANTHROPIC_BASE_URL', async () => {
+    Object.assign(mockEnv, {
+      ANTHROPIC_API_KEY: 'k',
+      ANTHROPIC_BASE_URL: `http://127.0.0.1:${upstreamPort}/gateway/anthropic/`,
+    });
+    proxyServer = await startCredentialProxy(0);
+    proxyPort = (proxyServer.address() as AddressInfo).port;
+    await makeRequest(proxyPort, { method: 'POST', path: '/v1/messages?beta=true' }, '{}');
+    expect(lastUpstreamUrl).toBe('/gateway/anthropic/v1/messages?beta=true');
   });
 
   it('strips hop-by-hop headers', async () => {
@@ -188,5 +194,24 @@ describe('credential-proxy', () => {
 
     expect(res.statusCode).toBe(502);
     expect(res.body).toBe('Bad Gateway');
+  });
+});
+
+describe('ensureCredentialsConfigured', () => {
+  beforeEach(() => {
+    for (const k of Object.keys(mockEnv)) delete mockEnv[k];
+  });
+
+  it.each(['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN'])('passes when %s is set', (key) => {
+    mockEnv[key] = 'x';
+    expect(() => ensureCredentialsConfigured()).not.toThrow();
+  });
+
+  it('throws naming the keys when .env has no credential', () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockEnv.ANTHROPIC_BASE_URL = 'http://localhost:1234';
+    expect(() => ensureCredentialsConfigured()).toThrow('ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN');
+    expect(errSpy.mock.calls.flat().join('\n')).toContain('.env');
+    errSpy.mockRestore();
   });
 });

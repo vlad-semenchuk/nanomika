@@ -11,7 +11,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import { GROUPS_DIR } from './config.js';
+import { resolveGroupFolderPath } from './group-folder.js';
 import { getContainerConfig } from './db/container-configs.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import type { AgentGroup, ContainerConfigRow } from './types.js';
@@ -37,9 +37,7 @@ export interface ContainerConfig {
   additionalMounts: AdditionalMountConfig[];
   skills: string[] | 'all';
   provider?: string;
-  groupName?: string;
   assistantName?: string;
-  agentGroupId?: string;
   maxMessagesPerPrompt?: number;
   model?: string;
   effort?: string;
@@ -57,9 +55,7 @@ export function configFromDb(row: ContainerConfigRow, group: AgentGroup): Contai
     additionalMounts: JSON.parse(row.additional_mounts) as AdditionalMountConfig[],
     skills: JSON.parse(row.skills) as string[] | 'all',
     provider: row.provider ?? undefined,
-    groupName: group.name,
     assistantName: row.assistant_name ?? group.name,
-    agentGroupId: group.id,
     maxMessagesPerPrompt: row.max_messages_per_prompt ?? undefined,
     model: row.model ?? undefined,
     effort: row.effort ?? undefined,
@@ -80,10 +76,20 @@ export function materializeContainerJson(agentGroupId: string): ContainerConfig 
 
   const config = configFromDb(row, group);
 
-  const p = path.join(GROUPS_DIR, group.folder, 'container.json');
+  const p = path.join(resolveGroupFolderPath(group.folder), 'container.json');
   const dir = path.dirname(p);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(p, JSON.stringify(config, null, 2) + '\n');
 
   return config;
+}
+
+// Package names end up in a generated Dockerfile RUN line, so allow only plain
+// names (with an optional version), never shell or Dockerfile syntax.
+const APT_PACKAGE = /^[a-z0-9][a-z0-9+.-]*(=[A-Za-z0-9.+:~-]+)?$/;
+const NPM_PACKAGE = /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*(@[A-Za-z0-9._^~+-]+)?$/;
+
+export function assertValidPackage(kind: 'apt' | 'npm', name: string): void {
+  const ok = kind === 'apt' ? APT_PACKAGE.test(name) : NPM_PACKAGE.test(name);
+  if (!ok || name.length > 214) throw new Error(`Invalid ${kind} package name: ${JSON.stringify(name)}`);
 }

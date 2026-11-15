@@ -9,7 +9,9 @@
  * the channel API has already fired twice → user sees the message twice.
  */
 import Database from 'better-sqlite3';
+import { execFileSync } from 'child_process';
 import fs from 'fs';
+import { createRequire } from 'module';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('./container-runner.js', () => ({
@@ -26,17 +28,11 @@ vi.mock('./config.js', async () => {
 
 const TEST_DIR = '/tmp/nanomika-test-delivery';
 
-import {
-  initTestDb,
-  closeDb,
-  runMigrations,
-  createAgentGroup,
-  createMessagingGroup,
-  createMessagingGroupAgent,
-} from './db/index.js';
+import { initTestDb, closeDb, runMigrations, createAgentGroup, createMessagingGroup } from './db/index.js';
 import { getDeliveredIds } from './db/session-db.js';
 import { resolveSession, outboundDbPath, openInboundDb } from './session-manager.js';
 import { deliverSessionMessages, setDeliveryAdapter } from './delivery.js';
+import { sweepSessionOrWait } from './host-sweep.js';
 
 function now(): string {
   return new Date().toISOString();
@@ -152,6 +148,67 @@ describe('deliverSessionMessages — concurrent invocations', () => {
     await deliverSessionMessages(session);
 
     expect(callCount).toBe(1);
+  });
+});
+
+/**
+ * A writer that dies inside a transaction leaves a journal with no lock
+ * holder: what the host sees while a container in a VM is mid-write.
+ */
+function leaveUnfinishedWrite(dbPath: string): void {
+  const script = `
+    const db = new (require(process.argv[1]))(process.argv[2]);
+    db.pragma('cache_size = 1');
+    db.exec('CREATE TABLE pad (x TEXT)');
+    for (let i = 0; i < 50; i++) db.prepare('INSERT INTO pad VALUES (?)').run('a'.repeat(3000));
+    db.exec('BEGIN');
+    for (let i = 1; i <= 200; i++) db.prepare('UPDATE pad SET x = ? WHERE rowid = ?').run('b'.repeat(3000), (i % 50) + 1);
+    process.kill(process.pid, 'SIGKILL');`;
+  const sqlite = createRequire(import.meta.url).resolve('better-sqlite3');
+  try {
+    execFileSync(process.execPath, ['-e', script, sqlite, dbPath]);
+  } catch {
+    // killed on purpose
+  }
+}
+
+describe('deliverSessionMessages — container mid-write', () => {
+  it('waits for the next poll when outbound.db has a journal it cannot roll back', async () => {
+    seedAgentAndChannel();
+    const { session } = resolveSession('ag-1', 'mg-1', null, 'shared');
+    insertOutbound('ag-1', session.id, 'out-1');
+    const dbPath = outboundDbPath('ag-1', session.id);
+
+    leaveUnfinishedWrite(dbPath);
+    expect(fs.existsSync(dbPath + '-journal')).toBe(true);
+
+    const calls: string[] = [];
+    setDeliveryAdapter({
+      async deliver(_c, _p, _t, _k, content) {
+        calls.push(content);
+        return 'plat-msg-1';
+      },
+    });
+    await expect(deliverSessionMessages(session)).resolves.toBeUndefined();
+    expect(calls).toHaveLength(0);
+
+    // The writer finishes (here: a read-write open rolls the journal back).
+    const rw = new Database(dbPath);
+    rw.prepare('SELECT 1').get();
+    rw.close();
+    await deliverSessionMessages(session);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('host sweep rolls back a write left by a stopped container', async () => {
+    seedAgentAndChannel();
+    const { session } = resolveSession('ag-1', 'mg-1', null, 'shared');
+    const dbPath = outboundDbPath('ag-1', session.id);
+    leaveUnfinishedWrite(dbPath);
+    expect(fs.existsSync(dbPath + '-journal')).toBe(true);
+
+    await expect(sweepSessionOrWait(session)).resolves.toBeUndefined();
+    expect(fs.existsSync(dbPath + '-journal')).toBe(false);
   });
 });
 

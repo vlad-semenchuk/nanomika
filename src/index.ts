@@ -8,14 +8,18 @@ import path from 'path';
 
 import type { Server } from 'http';
 
-import { backfillContainerConfigs } from './backfill-container-configs.js';
-import { CREDENTIAL_PROXY_PORT, DATA_DIR } from './config.js';
+import { CONTAINER_IMAGE, CREDENTIAL_PROXY_PORT, DATA_DIR } from './config.js';
+import { bootstrapFirstAgent } from './bootstrap.js';
 import { enforceStartupBackoff, resetCircuitBreaker } from './circuit-breaker.js';
-import { migrateGroupsToClaudeLocal } from './claude-md-compose.js';
-import { startCredentialProxy } from './credential-proxy.js';
+import { ensureCredentialsConfigured, startCredentialProxy } from './credential-proxy.js';
 import { initDb } from './db/connection.js';
 import { runMigrations } from './db/migrations/index.js';
-import { ensureContainerRuntimeRunning, cleanupOrphans, PROXY_BIND_HOST } from './container-runtime.js';
+import {
+  ensureContainerRuntimeRunning,
+  ensureAgentImagePresent,
+  cleanupOrphans,
+  PROXY_BIND_HOST,
+} from './container-runtime.js';
 import { startActiveDeliveryPoll, startSweepDeliveryPoll, setDeliveryAdapter, stopDeliveryPolls } from './delivery.js';
 import { startHostSweep, stopHostSweep } from './host-sweep.js';
 import { routeInbound } from './router.js';
@@ -50,28 +54,60 @@ async function dispatchResponse(payload: ResponsePayload): Promise<void> {
 }
 
 // Channel barrel — each enabled channel self-registers on import.
-// Channel skills uncomment lines in channels/index.ts to enable them.
+// Add or enable a channel by editing channels/index.ts.
 import './channels/index.js';
 
-// Modules barrel — default modules (typing, mount-security) ship here; skills
-// append registry-based modules. Imported for side effects (registrations).
+// Modules barrel — imported for side effects (each module registers its
+// hooks, delivery actions and response handlers).
 import './modules/index.js';
 
 // CLI command barrel — populates the `ncl` registry before the CLI server
 // accepts connections.
 import './cli/commands/index.js';
 import './cli/delivery-action.js';
-import { startCliServer, stopCliServer } from './cli/socket-server.js';
+import { ensureSocketPathFits, startCliServer, stopCliServer } from './cli/socket-server.js';
 
 import type { ChannelAdapter, ChannelSetup } from './channels/adapter.js';
 import { initChannelAdapters, teardownChannelAdapters, getChannelAdapter } from './channels/channel-registry.js';
 
 let credentialProxyServer: Server | undefined;
 
+async function startProxyOrExplain(): Promise<Server> {
+  if (!PROXY_BIND_HOST) {
+    console.error('\nFATAL: cannot pick an address for the credential proxy (no docker0 interface).');
+    console.error(
+      'Set CREDENTIAL_PROXY_HOST to an address your containers can reach, e.g. CREDENTIAL_PROXY_HOST=172.17.0.1 pnpm start\n',
+    );
+    throw new Error('Credential proxy address unknown: set CREDENTIAL_PROXY_HOST');
+  }
+  try {
+    return await startCredentialProxy(CREDENTIAL_PROXY_PORT, PROXY_BIND_HOST);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+      console.error(`\nFATAL: port ${CREDENTIAL_PROXY_PORT} is in use. Is another NanoMika host already running?`);
+      console.error('Stop it, or start this one on another port, e.g. CREDENTIAL_PROXY_PORT=3002 pnpm start\n');
+    }
+    throw err;
+  }
+}
+
 async function main(): Promise<void> {
   log.info('NanoMika starting');
 
-  // 0. Circuit breaker — backoff on rapid restarts
+  // 0. Preflight: fail fast on missing config before the restart backoff, so
+  // fixing one thing at a time never waits on the circuit breaker.
+  ensureSocketPathFits();
+  ensureCredentialsConfigured();
+  ensureContainerRuntimeRunning();
+  ensureAgentImagePresent(CONTAINER_IMAGE);
+
+  // Credential proxy — containers route Anthropic API calls through this
+  // host-side proxy, which injects the real key/token. Started before the
+  // orphan cleanup, so a second host in the same checkout fails here instead
+  // of stopping the first host's containers.
+  credentialProxyServer = await startProxyOrExplain();
+
+  // 0b. Circuit breaker — backoff on rapid restarts
   await enforceStartupBackoff();
 
   // 1. Init central DB
@@ -80,22 +116,12 @@ async function main(): Promise<void> {
   runMigrations(db);
   log.info('Central DB ready', { path: dbPath });
 
-  // 1b. Backfill container_configs from legacy container.json files.
-  // Idempotent — skips groups that already have a config row.
-  backfillContainerConfigs();
+  // 1b. First start: create the first agent and wire it to the local CLI
+  // when the DB has no agent groups. No-op afterwards.
+  bootstrapFirstAgent();
 
-  // 1c. One-time filesystem cutover — idempotent, no-op after first run.
-  migrateGroupsToClaudeLocal();
-
-  // 2. Container runtime
-  ensureContainerRuntimeRunning();
+  // 2. Container runtime: reap this install's orphans from a previous run
   cleanupOrphans();
-
-  // 2b. Credential proxy — containers route Anthropic API calls through this
-  // host-side proxy, which injects the real key/token. Must be up before any
-  // container spawns.
-  credentialProxyServer = await startCredentialProxy(CREDENTIAL_PROXY_PORT, PROXY_BIND_HOST);
-  log.info('Credential proxy started', { port: CREDENTIAL_PROXY_PORT, host: PROXY_BIND_HOST });
 
   // 3. Channel adapters
   await initChannelAdapters((adapter: ChannelAdapter): ChannelSetup => {
@@ -192,8 +218,18 @@ async function main(): Promise<void> {
 }
 
 /** Graceful shutdown. */
+let shuttingDown = false;
+
 async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
   log.info('Shutdown signal received', { signal });
+  // Idle client connections can keep server.close() waiting forever.
+  setTimeout(() => {
+    log.warn('Shutdown took too long, exiting');
+    resetCircuitBreaker();
+    process.exit(0);
+  }, 5000).unref();
   for (const cb of getShutdownCallbacks()) {
     try {
       await cb();
@@ -218,6 +254,8 @@ async function shutdown(signal: string): Promise<void> {
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
+// Closing the terminal that runs the host is a normal stop, not a crash.
+process.on('SIGHUP', () => shutdown('SIGHUP'));
 
 main().catch((err) => {
   log.fatal('Startup failed', { err });

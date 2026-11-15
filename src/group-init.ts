@@ -1,7 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 
-import { DATA_DIR, GROUPS_DIR } from './config.js';
+import { DATA_DIR } from './config.js';
+import { resolveGroupFolderPath } from './group-folder.js';
 import { ensureContainerConfig } from './db/container-configs.js';
 import { log } from './log.js';
 import type { AgentGroup } from './types.js';
@@ -50,7 +51,7 @@ export function initGroupFilesystem(group: AgentGroup, opts?: { instructions?: s
   const initialized: string[] = [];
 
   // 1. groups/<folder>/ — group memory + working dir
-  const groupDir = path.resolve(GROUPS_DIR, group.folder);
+  const groupDir = resolveGroupFolderPath(group.folder);
   if (!fs.existsSync(groupDir)) {
     fs.mkdirSync(groupDir, { recursive: true });
     initialized.push('groupDir');
@@ -58,10 +59,12 @@ export function initGroupFilesystem(group: AgentGroup, opts?: { instructions?: s
 
   // groups/<folder>/CLAUDE.local.md — per-group agent memory, auto-loaded by
   // Claude Code. Seeded with caller-provided instructions on first creation.
+  // lstat, not exists: a dangling symlink planted by the agent must not make
+  // the host create a file elsewhere. `wx` refuses anything already there.
   const claudeLocalFile = path.join(groupDir, 'CLAUDE.local.md');
-  if (!fs.existsSync(claudeLocalFile)) {
+  if (!lexists(claudeLocalFile)) {
     const body = opts?.instructions ? opts.instructions + '\n' : '';
-    fs.writeFileSync(claudeLocalFile, body);
+    fs.writeFileSync(claudeLocalFile, body, { flag: 'wx' });
     initialized.push('CLAUDE.local.md');
   }
 
@@ -77,9 +80,12 @@ export function initGroupFilesystem(group: AgentGroup, opts?: { instructions?: s
     initialized.push('.claude-shared');
   }
 
+  // .claude-shared is writable by the container. Replace a symlinked
+  // settings.json instead of writing through it.
   const settingsFile = path.join(claudeDir, 'settings.json');
+  if (lexists(settingsFile) && fs.lstatSync(settingsFile).isSymbolicLink()) fs.unlinkSync(settingsFile);
   if (!fs.existsSync(settingsFile)) {
-    fs.writeFileSync(settingsFile, DEFAULT_SETTINGS_JSON);
+    fs.writeFileSync(settingsFile, DEFAULT_SETTINGS_JSON, { flag: 'wx' });
     initialized.push('settings.json');
   } else {
     ensurePreCompactHook(settingsFile, initialized);
@@ -105,6 +111,16 @@ export function initGroupFilesystem(group: AgentGroup, opts?: { instructions?: s
 
 const PRE_COMPACT_COMMAND = 'bun /app/src/compact-instructions.ts';
 
+/** True when anything, including a dangling symlink, is at `p`. */
+function lexists(p: string): boolean {
+  try {
+    fs.lstatSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Patch an existing settings.json to add the PreCompact hook if missing.
  * Runs on every group init so pre-existing groups pick up the hook.
@@ -125,7 +141,9 @@ function ensurePreCompactHook(settingsFile: string, initialized: string[]): void
       hooks: [{ type: 'command', command: PRE_COMPACT_COMMAND }],
     });
 
-    fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n');
+    const tmp = `${settingsFile}.tmp-${process.pid}-${Date.now()}`;
+    fs.writeFileSync(tmp, JSON.stringify(settings, null, 2) + '\n', { flag: 'wx' });
+    fs.renameSync(tmp, settingsFile);
     initialized.push('settings.json (added PreCompact hook)');
   } catch {
     // Don't break init if settings.json is malformed — it'll use whatever's there.

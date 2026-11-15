@@ -21,8 +21,7 @@ export const CONTAINER_HOST_GATEWAY = 'host.docker.internal';
  * Docker (Linux): bind to the docker0 bridge IP so only containers can reach it,
  *   falling back to 0.0.0.0 if the interface isn't found.
  */
-export const PROXY_BIND_HOST =
-  process.env.CREDENTIAL_PROXY_HOST || detectProxyBindHost();
+export const PROXY_BIND_HOST = process.env.CREDENTIAL_PROXY_HOST || detectProxyBindHost();
 
 function detectProxyBindHost(): string {
   if (os.platform() === 'darwin') return '127.0.0.1';
@@ -38,7 +37,9 @@ function detectProxyBindHost(): string {
     const ipv4 = docker0.find((a) => a.family === 'IPv4');
     if (ipv4) return ipv4.address;
   }
-  return '0.0.0.0';
+  // No docker0 (e.g. rootless Docker): do not guess. 0.0.0.0 would expose the
+  // unauthenticated proxy on every interface. Startup asks for CREDENTIAL_PROXY_HOST.
+  return '';
 }
 
 /** CLI args needed for the container to resolve the host gateway. */
@@ -84,6 +85,25 @@ export function ensureContainerRuntimeRunning(): void {
     throw new Error('Container runtime is required but failed to start', {
       cause: err,
     });
+  }
+}
+
+/**
+ * Ensure the agent image exists locally. The host never builds it on its own:
+ * a missing image stops startup with a message naming the build command.
+ */
+export function ensureAgentImagePresent(image: string): void {
+  if (!/^[\w./:@-]+$/.test(image)) {
+    throw new Error(`Invalid container image name: ${image}`);
+  }
+  try {
+    execSync(`${CONTAINER_RUNTIME_BIN} image inspect ${image}`, { stdio: 'pipe', timeout: 10000 });
+  } catch (err) {
+    log.error('Agent image not found', { image, err });
+    console.error(`\nFATAL: agent image ${image} not found.`);
+    console.error('Build it once with:  pnpm run build:image');
+    console.error('Then start NanoMika again.\n');
+    throw new Error(`Agent image ${image} not found; run \`pnpm run build:image\``, { cause: err });
   }
 }
 

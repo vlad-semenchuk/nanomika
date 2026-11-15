@@ -26,14 +26,19 @@ export function readEnvFile(keys: string[]): Record<string, string> {
     if (!trimmed || trimmed.startsWith('#')) continue;
     const eqIdx = trimmed.indexOf('=');
     if (eqIdx === -1) continue;
-    const key = trimmed.slice(0, eqIdx).trim();
+    const key = trimmed
+      .slice(0, eqIdx)
+      .trim()
+      .replace(/^export\s+/, '');
     if (!wanted.has(key)) continue;
     let value = trimmed.slice(eqIdx + 1).trim();
-    if (
-      value.length >= 2 &&
-      ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))
-    ) {
-      value = value.slice(1, -1);
+    // A quoted value, optionally followed by a comment: KEY="value" # comment
+    const quoted = value.match(/^(["'])(.*)\1\s*(#.*)?$/);
+    if (quoted) {
+      value = quoted[2];
+    } else {
+      // Unquoted value: a `#` after whitespace starts a trailing comment.
+      value = value.replace(/(^|\s+)#.*$/, '').trim();
     }
     if (value) result[key] = value;
   }

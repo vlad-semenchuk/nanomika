@@ -15,6 +15,7 @@ import type { ResponsePayload } from '../../response-registry.js';
 import { log } from '../../log.js';
 import { writeSessionMessage } from '../../session-manager.js';
 import type { PendingApproval } from '../../types.js';
+import { hasAdminPrivilege } from '../permissions/db/user-roles.js';
 import { getApprovalHandler } from './primitive.js';
 
 export async function handleApprovalsResponse(payload: ResponsePayload): Promise<boolean> {
@@ -22,7 +23,23 @@ export async function handleApprovalsResponse(payload: ResponsePayload): Promise
   const approval = getPendingApproval(payload.questionId);
   if (!approval) return false;
 
-  await handleRegisteredApproval(approval, payload.value, payload.userId ?? '');
+  // Only an owner or an admin of the requesting agent's group may answer.
+  // Anyone else who can see the card (e.g. a channel member) is ignored.
+  const clickerId = payload.userId
+    ? payload.userId.includes(':')
+      ? payload.userId
+      : `${payload.channelType}:${payload.userId}`
+    : null;
+  const session = approval.session_id ? getSession(approval.session_id) : undefined;
+  if (session && (!clickerId || !hasAdminPrivilege(clickerId, session.agent_group_id))) {
+    log.warn('Approval answer ignored — clicker is not an owner or admin', {
+      approvalId: approval.approval_id,
+      clickerId,
+    });
+    return true;
+  }
+
+  await handleRegisteredApproval(approval, payload.value, clickerId ?? '');
   return true;
 }
 

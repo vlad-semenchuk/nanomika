@@ -1,105 +1,110 @@
-# NanoMika Architecture (Draft)
+# NanoMika Architecture
 
 ## Core Idea
 
-Each agent session has a mounted SQLite DB. The DB is the one and only IO mechanism between host and container. No IPC files, no stdin piping. Two tables: messages_in (host → agent-runner) and messages_out (agent-runner → host). Everything is a message.
+Each agent session has a mounted session folder holding two SQLite DBs. The DBs are the one and only IO mechanism between host and container. No IPC files, no stdin piping. `inbound.db` holds `messages_in` (host → agent-runner); `outbound.db` holds `messages_out` (agent-runner → host). Everything is a message.
 
 ## Two-Level DB
 
-**Central DB (host process):**
-- Agent groups, conversations, routing tables
-- Maps platform IDs → agent groups → sessions
+**Central DB (host process, `data/v2.db`):**
+- Agent groups, messaging groups, wiring, sessions, users and roles
+- Maps platform IDs → messaging groups → agent groups → sessions
 - Channel adapters don't touch this directly — the host does the lookup
 
-**Per-session DB (mounted into container):**
-- messages_in (written by host, read by agent-runner)
-- messages_out (written by agent-runner, read by host)
-- Everything is a message: chat, tasks, webhooks, system actions, agent-to-agent — all use these two tables
-- One DB per session, not per agent group
+**Per-session DBs (mounted into container, `data/v2-sessions/<agent_group_id>/<session_id>/`):**
+- `inbound.db` — `messages_in` (written by host, read by agent-runner), plus `delivered`, `destinations`, `session_routing`
+- `outbound.db` — `messages_out` (written by agent-runner, read by host), plus `processing_ack`, `session_state`, `container_state`
+- Everything is a message: chat, tasks, system actions, agent-to-agent — all use `messages_in` / `messages_out`
+- One pair of DBs per session, not per agent group
+- Exactly one writer per file
+
+See [db.md](db.md), [db-central.md](db-central.md) and [db-session.md](db-session.md) for the full schemas.
 
 ## Agent Groups vs Sessions
 
-An agent group has its own filesystem — folder, CLAUDE.md, skills, container config. Multiple sessions can share the same agent group (same filesystem, same skills) but each session gets its own DB mounted at a known path. Each session = a separate container with the same agent group's filesystem but a different session DB.
+An agent group has its own filesystem — folder, CLAUDE.md, skills, container config. Multiple sessions can share the same agent group (same filesystem, same skills) but each session gets its own session folder mounted at `/workspace`. Each session = a separate container with the same agent group's filesystem but different session DBs.
 
 ## Message Flow
 
 ```
 Platform event
-  → Channel adapter (trigger check, ID extraction)
-  → Returns: { platformChannelId, platformThreadId, triggered }
-  → Host maps platformChannelId + platformThreadId → agent group + session
-  → Host writes message to session's DB
-  → Host calls wakeUpAgent(session)
+  → Channel adapter (receive, ID extraction, mention detection)
+  → Calls setup.onInbound(platformId, threadId, message)
+  → Router (src/router.ts) maps channelType + platformId → messaging group → wired agent groups
+  → Router evaluates each wiring (engage_mode, sender_scope, access gate) and resolves the session
+  → Host writes message to session's inbound.db
+  → Host calls wakeContainer(session)
   → Container spins up (or is already running)
-  → Agent-runner polls its session DB, finds new messages
+  → Agent-runner polls inbound.db, finds new messages
   → Agent-runner processes with Claude
-  → Agent-runner writes response to session DB
-  → Host polls active session DBs for responses
-  → Host reads response, looks up conversation, delivers through channel adapter
+  → Agent-runner writes response to outbound.db
+  → Host polls session outbound DBs for responses
+  → Host reads response, validates the destination, delivers through channel adapter
 ```
 
 ## Channel Adapters
 
 Channel adapters are responsible for:
-1. Receiving platform events (webhooks, polling, websockets — platform-specific)
-2. **Filtering**: deciding which messages to forward to the host for processing. This can be stateless (regex trigger match) or stateful (e.g., "was the bot mentioned in this thread at some point? If so, forward all subsequent messages"). The adapter receives a stream of unfiltered platform messages and decides which ones to pass on. How it decides is an implementation detail — NanoMika doesn't know or care.
+1. Receiving platform events (webhooks, polling, websockets, a local socket — platform-specific)
+2. **Filtering**: deciding which platform messages to forward to the host. The adapter also reports whether the bot was mentioned (`isMention`) and whether the conversation is a group (`isGroup`); the router uses these flags.
 3. Extracting and standardizing two IDs:
-   - **Platform channel ID** — identifies the conversation (WhatsApp group, Slack channel, email thread)
-   - **Platform thread ID** — optional sub-context (Slack thread, GitHub PR comment thread)
+   - **Platform channel ID** — identifies the conversation (a Slack channel, a DM, the local CLI terminal)
+   - **Platform thread ID** — optional sub-context (a Slack thread)
 4. Outbound delivery — sending responses back to the platform
 
 The channel adapter does NOT know about agent group IDs or session IDs. It returns platform-level identifiers. The host maps those to the entity model.
 
-The two-level ID scheme (channel ID + thread ID) gives flexibility:
-- Want every Slack thread to be a separate session? Return unique thread IDs.
-- Want all messages in a Slack channel to share a session? Return the same thread ID (or null).
-- This is configured per-channel, not globally.
+The interface is `ChannelAdapter` in `src/channels/adapter.ts`. Adapters self-register with `registerChannelAdapter()` (`src/channels/channel-registry.ts`) when imported from the barrel `src/channels/index.ts`. Only the local CLI channel (`src/channels/cli.ts`) is imported by default; `src/channels/slack.ts` is in the tree with its import line commented out. To add another channel, see [writing-a-channel.md](writing-a-channel.md).
+
+The two-level ID scheme (channel ID + thread ID) gives flexibility. An adapter declares `supportsThreads`:
+- `supportsThreads: false` — the router strips thread IDs; the channel itself is the conversation.
+- `supportsThreads: true` — in group chats each thread gets its own session (unless the wiring is `agent-shared`); DMs collapse to one session.
 
 ### Channel Adapter Configuration
 
-Adapters are stateless — they receive config from the host at setup time, not from the DB directly.
+Adapters receive callbacks from the host at setup time (`ChannelSetup`: `onInbound`, `onInboundEvent`, `onMetadata`, `onAction`), not DB config.
 
 **What lives in code (per channel type, doesn't change at runtime):**
-- Auto-registration behavior (enabled/disabled, how it works)
-- Sender allowlist rules
-- Whether allowlisted senders can auto-register groups
 - Platform-specific connection and message handling
+- Credentials, read from `.env` by the adapter module itself
+- Whether the platform uses threads (`supportsThreads`)
 
-These are decisions made when setting up the channel adapter. Change them = change the code.
+These are decisions made when writing the channel adapter. Change them = change the code.
 
-**What lives in the DB (per group, varies group to group):**
-- Which agent group handles it
-- Trigger / filter rules (regex, @mention-only, exclude certain senders, etc.)
-- Response scope (respond to all messages vs only triggered/allowlisted)
-- Session mode (shared vs per-thread)
+**What lives in the DB (per messaging group / wiring, varies group to group):**
+- Which agent groups handle it (`messaging_group_agents`)
+- Engage rules: `engage_mode` (`pattern` | `mention` | `mention-sticky`) and `engage_pattern`
+- Sender rules: `unknown_sender_policy` on the messaging group, `sender_scope` on the wiring
+- What happens to non-engaging messages: `ignored_message_policy` (`drop` | `accumulate`)
+- Session mode (`shared` | `per-thread` | `agent-shared`)
 
-The host reads per-group config from the DB and passes it to the adapter at setup. If config changes at runtime (admin agent registers a new group, changes a trigger), the host calls the adapter's update method.
+The router reads these rules from the DB on every message, so changes made with `ncl` take effect immediately without touching the adapter.
 
 ### Auto-Registration
 
-When the adapter forwards a message from an unknown group, the host needs to decide whether to create the group and a session for it.
+When a message arrives for a conversation with no `messaging_groups` row, the router decides whether to create one.
 
-**The adapter controls whether to forward unknown messages** — based on its code-level auto-registration rules (sender allowlist, group-add detection, etc.). If the adapter forwards it, the host creates the group + session.
+- Plain messages in unknown conversations are ignored — no row, no DB writes.
+- If the bot was addressed (mention or DM), the router creates the messaging group with `unknown_sender_policy = 'request_approval'` and no wiring.
+- A mention in a messaging group with no wiring is recorded as a dropped message and handed to the channel-request gate (permissions module, `src/modules/permissions/channel-approval.ts`), which asks an owner to approve the channel. A denied channel (`denied_at` set) is dropped silently afterwards.
 
-**Session creation for known groups:**
-- Shared session mode: host finds the existing session or creates one if it's the first message
-- Per-thread session mode: host looks up by threadId. If no session exists for this thread, auto-creates one with the same agent group
+**Session creation for wired groups:**
+- `shared` mode: host finds the existing session for (agent group, messaging group) or creates one if it's the first message
+- `per-thread` mode: host looks up by thread ID. If no session exists for this thread, it creates one with the same agent group
+- `agent-shared` mode: one session per agent group across all messaging groups wired this way
 
-**The code-level rules are channel-specific:**
-- WhatsApp: if an allowlisted number adds the bot to a group → auto-register. If an unknown number DMs → depends on the adapter's configuration.
-- Email: if the sender is known → auto-register the thread. If unknown → drop.
-- Slack: if someone @mentions the bot in a new channel → adapter decides whether to forward based on its rules.
-
-No `channel_configs` table — channel-type-level behavior is baked into the adapter code.
+No `channel_configs` table — channel-type-level behavior is in the adapter code.
 
 ### Chat SDK Integration
 
-Chat SDK adapters are wrapped per-channel:
+Chat SDK adapters are wrapped per-channel by `src/channels/chat-sdk-bridge.ts`:
 - Each Chat SDK adapter gets its own Chat instance
-- Concurrency mode is configured per-channel (concurrent for chat, queue for tasks, debounce for webhooks)
-- A bridge wraps the Chat instance + adapter to conform to NanoMika's standard channel interface
-- Chat SDK handles: webhook parsing, dedup, message history, platform API calls, rich content delivery
+- Concurrency mode is configured per-channel (default `concurrent`)
+- The bridge wraps the Chat instance + adapter to conform to NanoMika's `ChannelAdapter` interface
+- Chat SDK handles: webhook parsing, dedup, platform API calls, rich content delivery. Its state is stored in the central DB (`chat_sdk_*` tables, `src/state-sqlite.ts`)
 - NanoMika handles: routing, agent lifecycle, session management
+
+Webhook-mode Chat SDK adapters are served by `src/webhook-server.ts` (`/webhook/{adapterName}`), started lazily on first registration.
 
 **Chat SDK's subscription model:**
 
@@ -108,57 +113,37 @@ Chat SDK has its own thread-level subscription concept (distinct from NanoMika's
 - `thread.subscribe()` — opts into all future messages in that thread
 - `onSubscribedMessage` — fires for all messages in subscribed threads
 
-This is sub-channel granularity. NanoMika registers at the channel level ("listen to this Discord channel"). Chat SDK subscribes at the thread level ("track this specific Slack thread"). The bridge lets Chat SDK manage its own subscriptions internally — NanoMika doesn't interfere with or replicate this.
+This is sub-channel granularity. NanoMika registers at the channel level. Chat SDK subscribes at the thread level. The router asks the adapter to `subscribe()` a thread when a `mention-sticky` wiring first engages there.
 
 **Platform capability differences:**
 
-Capabilities vary significantly across adapters (see [Chat SDK adapter docs](https://chat-sdk.dev/docs/adapters)):
-- **Slack**: Full rich content (Block Kit cards, modals, streaming, reactions, ephemeral messages)
-- **Discord**: Embeds, buttons, streaming via post+edit
-- **WhatsApp (Cloud API)**: DMs only, interactive reply buttons, no streaming, no reactions
-- **GitHub/Linear**: Markdown comments, no interactive elements
-- **Telegram**: Inline keyboard buttons, streaming via post+edit
+Capabilities vary significantly across Chat SDK adapters (see [Chat SDK adapter docs](https://chat-sdk.dev/docs/adapters)). Slack, the one Chat SDK channel in the tree, supports rich content (Block Kit cards, reactions, edits). Other platforms differ — some have no cards, reactions or edits.
 
-The host/bridge handles graceful degradation — if an agent posts a card on a platform that doesn't support cards, it falls back to text.
+The bridge handles graceful degradation — if an agent posts a card on a platform that doesn't support cards, it falls back to text.
 
-Non-Chat-SDK channels (WhatsApp via Baileys, Gmail, custom integrations) implement the NanoMika channel interface directly — no bridge, no Chat SDK types.
+Non-Chat-SDK channels, such as the local CLI channel, implement the `ChannelAdapter` interface directly — no bridge, no Chat SDK types.
 
 ## Container Lifecycle
 
 The host is an orchestrator:
-1. **Spawn** — when wakeUpAgent is called and no container exists for the session
-2. **Idle kill** — when a container has no unprocessed messages for some timeout period
-3. **Limits** — MAX_CONCURRENT_CONTAINERS caps active containers
+1. **Spawn** — when `wakeContainer` is called and no container exists for the session (concurrent wakes for the same session share one spawn)
+2. **Stuck / idle kill** — the host sweep kills a running container whose heartbeat file is older than 30 minutes, or that claimed a message and showed no sign of life within the tolerance window (see [Host Polling](#host-polling))
+3. **Exit** — when the container process exits, the host marks the session's container stopped
 
-When a container spins up, the agent-runner immediately starts polling its session DB. Messages are already there waiting.
+When a container spins up, the agent-runner immediately starts polling its inbound DB. Messages are already there waiting.
 
 ## Media Handling
 
 ### Inbound
 
 Media is not downloaded by the host. Instead:
-- Messages include download URLs (signed URLs where possible)
-- Agent-runner downloads and processes media inside the container
-- For channels where signed URLs don't work (e.g., WhatsApp with buffered streams), the channel adapter downloads the media and serves it via a local URL/server that the container can access
-
-**Native content blocks (provider-dependent):**
-
-The agent-runner detects file types and passes supported types as native content blocks where the provider supports it:
-
-| Type | Claude | Codex | OpenCode |
-|------|--------|-------|----------|
-| Images (JPEG, PNG, GIF, WebP) | Native image content block | Save to disk, reference in prompt | Save to disk, reference in prompt |
-| PDFs | Native document content block | Save to disk | Save to disk |
-| Audio | Native audio content block | Save to disk | Save to disk |
-| Other files (code, data, video, archives) | Save to disk | Save to disk | Save to disk |
-
-"Save to disk" means downloaded to `/workspace/downloads/{messageId}/` and referenced in the prompt text as an available file path. The agent can use tools (Read, Bash) to access it.
-
-The agent-runner builds the prompt differently per provider. For Claude, it constructs multi-part `MessageParam` content with image/document blocks. For Codex/OpenCode, everything is text with file path references.
+- A channel adapter either passes attachment URLs through, or includes the file bytes as base64 `data` on the attachment (the Chat SDK bridge does this)
+- When an attachment carries `data`, the host writes it to the session folder at `inbox/{messageId}/{filename}` and replaces `data` with a `localPath` before writing the `messages_in` row (`src/session-manager.ts`, with path-safety checks)
+- The agent-runner lists attachments in the prompt text: saved files as `/workspace/inbox/{messageId}/{filename}`, others by URL. The agent uses tools (Read, Bash) to access them.
 
 ### Outbound
 
-Outbound file delivery is tool-based. The agent calls a tool (e.g., `send_file`) with a file path. The agent-runner moves the file to the outbox and writes the messages_out row.
+Outbound file delivery is tool-based. The agent calls `send_file` with a file path. The agent-runner copies the file into the outbox and writes the messages_out row.
 
 ```
 /workspace/
@@ -171,10 +156,10 @@ Outbound file delivery is tool-based. The agent calls a tool (e.g., `send_file`)
 messages_out content references filenames only:
 
 ```json
-{ "text": "Here's the chart", "files": ["chart.png", "report.pdf"] }
+{ "text": "Here's the chart", "files": ["chart.png"] }
 ```
 
-No paths in the DB — the convention is the contract. The host reads files from `outbox/{message_id}/` in the mounted session folder and delivers them via the adapter (Chat SDK `FileUpload` with buffer data, or platform-specific upload for native channels). Host cleans up the outbox directory after successful delivery.
+No paths in the DB — the convention is the contract. The host reads files from `outbox/{message_id}/` in the mounted session folder and delivers them via the adapter. Host cleans up the outbox directory after successful delivery.
 
 Outbound files use a dedicated `send_file` MCP tool (separate from `send_message`). See [agent-runner-details.md](agent-runner-details.md) for the tool interface.
 
@@ -184,40 +169,45 @@ Dedup is the channel adapter's responsibility. Chat SDK handles this internally.
 
 ## Session DB Schema
 
-Two tables. JSON blobs for content — schema-free, format varies by `kind`.
+JSON blobs for content — schema-free, format varies by `kind`. The schemas are `INBOUND_SCHEMA` / `OUTBOUND_SCHEMA` in `src/db/schema.ts`; the main tables:
 
 ```sql
--- Host writes, agent-runner reads
+-- inbound.db: host writes, agent-runner reads
 CREATE TABLE messages_in (
   id             TEXT PRIMARY KEY,
+  seq            INTEGER UNIQUE,     -- host uses even numbers
   kind           TEXT NOT NULL,      -- 'chat' | 'chat-sdk' | 'task' | 'webhook' | 'system'
   timestamp      TEXT NOT NULL,
-  status         TEXT DEFAULT 'pending',  -- 'pending' | 'processing' | 'completed' | 'failed'
-  status_changed TEXT,               -- ISO timestamp of last status change
+  status         TEXT DEFAULT 'pending',  -- 'pending' | 'completed' | 'failed' (+ 'paused' for tasks)
   process_after  TEXT,               -- ISO timestamp. NULL = process immediately.
   recurrence     TEXT,               -- cron expression. NULL = one-shot.
+  series_id      TEXT,               -- groups occurrences of a recurring task
   tries          INTEGER DEFAULT 0,  -- number of processing attempts
+  trigger        INTEGER NOT NULL DEFAULT 1,  -- 0 = context only (don't wake), 1 = wake agent
 
-  -- routing (agent-runner copies to messages_out; agent never sees these)
+  -- routing (agent never sees these)
   platform_id    TEXT,
   channel_type   TEXT,
   thread_id      TEXT,
 
   -- payload (structure depends on kind)
-  content        TEXT NOT NULL        -- JSON blob
+  content        TEXT NOT NULL,       -- JSON blob
+
+  source_session_id TEXT,             -- agent-to-agent return path
+  on_wake        INTEGER NOT NULL DEFAULT 0  -- 1 = only picked up by a fresh container's first poll
 );
 
--- Agent-runner writes, host reads
+-- outbound.db: agent-runner writes, host reads
 CREATE TABLE messages_out (
   id             TEXT PRIMARY KEY,
+  seq            INTEGER UNIQUE,     -- container uses odd numbers
   in_reply_to    TEXT,               -- references messages_in.id (optional)
   timestamp      TEXT NOT NULL,
-  delivered      INTEGER DEFAULT 0,
   deliver_after  TEXT,               -- ISO timestamp. NULL = deliver immediately.
-  recurrence     TEXT,               -- cron expression. NULL = one-shot.
+  recurrence     TEXT,
 
-  -- routing (default: copied from messages_in by agent-runner)
-  kind           TEXT NOT NULL,      -- 'chat' | 'chat-sdk' | 'task' | 'webhook' | 'system'
+  -- routing
+  kind           TEXT NOT NULL,      -- 'chat' | 'chat-sdk' | 'system'
   platform_id    TEXT,
   channel_type   TEXT,
   thread_id      TEXT,
@@ -225,26 +215,28 @@ CREATE TABLE messages_out (
   -- payload (format matches kind)
   content        TEXT NOT NULL        -- JSON blob
 );
-
 ```
+
+Processing status is not written to `messages_in` by the container (it cannot write `inbound.db`). The container records claims in `outbound.db`'s `processing_ack`; the host copies them into `messages_in.status`. Delivery outcomes are recorded by the host in `inbound.db`'s `delivered` table, never in `outbound.db`.
 
 ### Scheduling
 
 One-shot and recurring tasks use the same tables — no separate scheduler.
 
-**One-shot:** `process_after` (inbound) or `deliver_after` (outbound) with `recurrence = NULL`.
+**One-shot:** a `kind: 'task'` `messages_in` row with `process_after` and `recurrence = NULL`.
 
-**Recurring:** Same, plus a `recurrence` cron expression. After the host marks a row as handled/delivered, if `recurrence` is set, it inserts a new row with `process_after`/`deliver_after` advanced to the next cron occurrence. Next time is computed from the scheduled time (not wall clock) to prevent drift.
+**Recurring:** Same, plus a `recurrence` cron expression (evaluated in the configured timezone). Each host sweep, for every `completed` row that still has a `recurrence`, the scheduling module (`src/modules/scheduling/recurrence.ts`) inserts a new pending row with `process_after` set to the next cron occurrence after the current time, copies `series_id` forward, and clears `recurrence` on the original.
 
-**Host sweep** (every ~60s across all session DBs):
-- `messages_in WHERE status = 'pending' AND (process_after IS NULL OR process_after <= now())` → wake agent
-- `messages_in WHERE status = 'processing' AND status_changed < (now - stale_threshold)` → stale detection, increment tries, reset to pending with backoff
-- `messages_out WHERE delivered = 0 AND (deliver_after IS NULL OR deliver_after <= now())` → deliver
-- After completing/delivering a row with `recurrence`, insert next occurrence
+**Host sweep** (every 60s across all active sessions, `src/host-sweep.ts`):
+- Sync `processing_ack` (outbound.db) → `messages_in.status` (inbound.db)
+- Due `messages_in` rows (`status = 'pending'`, `trigger = 1`, `process_after` NULL or past) and no running container → wake
+- Running container: kill if past the heartbeat ceiling or a claim is stuck, then reset its claimed messages with backoff
+- No running container but leftover `processing` claims → reset those messages to pending with backoff, increment `tries`
+- After a recurring row completes, insert the next occurrence
 
-**Active container poll** (~1s) checks the same conditions but only for sessions with running containers.
+**Active delivery poll** (~1s, `src/delivery.ts`) delivers due `messages_out` rows for sessions with running containers; a 60s sweep poll does the same for all active sessions.
 
-**Agent-runner creates schedules** by writing messages_in (to itself) or messages_out (reminders/notifications) with `process_after` and optionally `recurrence`.
+**Agent-runner creates schedules** with the `schedule_task` tool, which writes a `kind: 'system'` messages_out row; the host inserts the task row into inbound.db.
 
 ### messages_in content by kind
 
@@ -252,94 +244,76 @@ One-shot and recurring tasks use the same tables — no separate scheduler.
 ```json
 {
   "sender": "John",
-  "senderId": "user123",
+  "senderId": "cli:local",
   "text": "Check this PR",
-  "attachments": [{ "type": "image", "url": "https://signed-url..." }],
-  "isFromMe": false
+  "attachments": [{ "type": "image", "name": "shot.png", "localPath": "inbox/msg-1/shot.png" }]
 }
 ```
 
-**`chat-sdk`** — full Chat SDK `SerializedMessage`, passed through from bridge adapter. Includes `author`, `text`, `formatted` (mdast AST), `attachments`, `isMention`, `links`, `metadata`.
+**`chat-sdk`** — Chat SDK serialized message, passed through from the bridge. Includes `author`, `text`, `attachments`, `isMention`, and other Chat SDK fields.
 
 **`task`** — scheduled task firing.
 ```json
-{ "prompt": "Review open PRs", "script": "scripts/review.sh" }
+{ "prompt": "Review open PRs", "script": "./review.sh" }
 ```
 
-**`webhook`** — raw webhook payload.
+**`webhook`** — raw webhook payload. The formatter supports this kind; no producer in the tree writes it.
 ```json
 { "source": "github", "event": "pull_request", "payload": { ... } }
 ```
 
-**`system`** — host action result (response to a system action the agent requested).
+**`system`** — host response to a tool call the agent is waiting on (e.g. `ask_user_question`). The poll loop skips these; the waiting tool reads them.
 ```json
-{ "action": "register_group", "status": "success", "result": { "agent_group_id": "ag-456" } }
+{ "type": "question_response", "questionId": "q-123", "selectedOption": "Yes" }
 ```
 
 ### messages_out content by kind
 
-Output `kind` determines the format and delivery adapter. Default: agent-runner copies `kind` and routing fields from the messages_in row it's responding to.
+Output `kind` determines how the host handles the row.
 
-**`chat`** — simple NanoMika format. NanoMika channel delivers via `sendMessage(text)`.
+**`chat`** — simple NanoMika format. Delivered through the channel adapter's `deliver()`.
 ```json
 { "text": "LGTM, merging now" }
 ```
 
-**`chat-sdk`** — Chat SDK `AdapterPostableMessage`. Bridge adapter delivers via `thread.post()`. Can be markdown, card, or raw — adapter handles platform conversion.
+**`chat-sdk`** — cards and questions (`ask_user_question`, `send_card`). The Chat SDK bridge renders them; the CLI channel prints them as text.
 ```json
-{ "markdown": "## Review\n**LGTM**", "attachments": [...] }
-```
-```json
-{ "card": { "type": "card", "title": "Review", "children": [...] }, "fallbackText": "..." }
+{ "type": "card", "card": { "title": "Review", "children": [...] }, "fallbackText": "..." }
 ```
 
-**`task`** — task result. Host logs and optionally notifies.
+**`system`** — host action request. Host reads it, dispatches to the handler registered for `action` with `registerDeliveryAction()`, validates permissions, and executes. Registered actions: `schedule_task`, `cancel_task`, `pause_task`, `resume_task`, `update_task` (scheduling module), `create_agent` (agent-to-agent module), `cli_request` (`ncl` from inside the container, `src/cli/delivery-action.ts`).
 ```json
-{ "result": "3 PRs reviewed", "status": "success" }
-```
-
-**`webhook`** — webhook response. Host sends HTTP response or notifies.
-```json
-{ "response": { "status": 200, "body": { ... } } }
-```
-
-**`system`** — host action request (register group, reset session, etc.). Host reads, validates permissions, executes, writes result back as a `system` messages_in row.
-```json
-{ "action": "reset_session", "payload": { "session_id": "sess-123" } }
+{ "action": "schedule_task", "taskId": "msg-123", "prompt": "Review open PRs", "processAfter": "2026-01-15T21:00:00.000Z", "recurrence": null }
 ```
 
 ### Interactive Operations (Cards, Reactions, Edits)
 
-All interactive operations flow through messages_in/out — the DB is the only IO boundary for the container. The agent uses MCP tools; the agent-runner translates tool calls into structured messages_out rows; the host delivers through the appropriate adapter method.
+All interactive operations flow through messages_in/out — the DBs are the only IO boundary for the container. The agent uses MCP tools; the agent-runner translates tool calls into structured messages_out rows; the host delivers through the appropriate adapter.
 
-**Cards with user interaction (e.g., "Ask User Question"):**
+**Cards with user interaction (`ask_user_question`):**
 
-1. Agent calls `ask_user_question` tool with question + options
+1. Agent calls `ask_user_question` tool with title, question and options
 2. Agent-runner writes messages_out with the question card
-3. Host delivers as interactive card through adapter (e.g., Slack Block Kit buttons)
-4. User clicks an option
-5. Platform sends event back to adapter → host writes messages_in with the response
-6. Agent-runner reads messages_in, matches to pending tool call, returns selection to agent as tool result
+3. Host delivers the card through the adapter (e.g., Slack Block Kit buttons) and records a `pending_questions` row
+4. User clicks an option (on the CLI: `/answer <questionId> <option>`)
+5. Adapter calls `onAction` → the interactive module writes a `question_response` system row to the session's messages_in and wakes the container
+6. Agent-runner's waiting tool call finds the response and returns the selection to the agent as the tool result
 
-The agent-runner holds the tool call open while waiting for the user's response in messages_in. The round-trip goes: agent → messages_out → host → platform → user clicks → platform → host → messages_in → agent-runner → agent.
+The agent-runner holds the tool call open (default timeout 300s) while waiting for the user's response in messages_in. The round-trip goes: agent → messages_out → host → platform → user clicks → platform → host → messages_in → agent-runner → agent.
 
 **Approvals:**
 
-Two patterns, both handled at the host level:
-- **Implicit**: Agent calls a tool that requires approval. Host intercepts, sends approval card to admin, waits for response, then executes or rejects. The agent doesn't know about the approval step.
-- **Explicit**: Agent explicitly requests approval via a tool. Agent-runner writes the approval request to messages_out. Same flow as "ask user question" — response comes back through messages_in.
+Approvals are host-side. A caller invokes `requestApproval()` (`src/modules/approvals/primitive.ts`) with an action and payload; the module delivers an approval card to an approver and persists a `pending_approvals` row. When the approver clicks, the handler registered with `registerApprovalHandler()` applies the change and notifies the requesting agent. The agent doesn't see the approval step — today it is used for approval-gated `ncl` commands run from inside a container. Unknown-sender and new-channel approvals in the permissions module follow the same card pattern with their own tables (`pending_sender_approvals`, `pending_channel_approvals`).
 
-In both cases, the approval and action execution happen on the host side, not the agent side.
-
-**Approval routing:** Privilege is a user-level concept. `user_roles` records `owner` (global only — first user to pair becomes owner) and `admin` (global or scoped to a specific `agent_group_id`). When an action requires approval, `pickApprover(agentGroupId)` returns candidates in order: scoped admins for that agent group → global admins → owners (deduplicated). `pickApprovalDelivery` then takes the first candidate reachable via `ensureUserDm` (with a same-channel-kind tie-break so a Discord approval request prefers a Discord-using approver). The approval card lands in the approver's DM messaging group, not the origin chat. Delivery is resolved through the Chat SDK's `openDM` for resolution-required channels (Discord/Slack/…) or the user's handle directly for direct-addressable channels (Telegram/WhatsApp/…), and the mapping is cached in `user_dms` for subsequent requests. See `src/access.ts`, `src/user-dm.ts`.
+**Approval routing:** Privilege is a user-level concept. `user_roles` records `owner` (global only — on first start the `cli:local` user is granted owner) and `admin` (global or scoped to a specific `agent_group_id`). When an action requires approval, `pickApprover(agentGroupId)` returns candidates in order: scoped admins for that agent group → global admins → owners (deduplicated). `pickApprovalDelivery` then takes the first candidate reachable via `ensureUserDm` (with a same-channel-kind tie-break so a request from one channel prefers an approver on that channel). The approval card lands in the approver's DM messaging group, not the origin chat. Delivery is resolved through the adapter's `openDM` for channels that distinguish user ID from DM channel ID, or the user's handle directly otherwise, and the mapping is cached in `user_dms` for subsequent requests. See `src/modules/permissions/access.ts`, `src/modules/permissions/user-dm.ts`, `src/modules/approvals/primitive.ts`.
 
 **Editing a sent message:**
 
-Agent calls an `edit_message` tool with the message ID and new content. Agent-runner writes messages_out with an edit operation. Host calls `adapter.editMessage()`. Messages in the agent's context include integer IDs so the agent can reference them.
+Agent calls an `edit_message` tool with the message ID and new content. Agent-runner writes messages_out with an edit operation. The adapter applies the edit. Messages in the agent's context include integer IDs (`seq`) so the agent can reference them.
 
 **Reactions:**
 
-Agent calls `add_reaction` tool with message ID and emoji. Agent-runner writes messages_out with a reaction operation. Host calls `adapter.addReaction()`.
+Agent calls `add_reaction` tool with message ID and emoji. Agent-runner writes messages_out with a reaction operation. The adapter adds the reaction.
 
 **Operations in messages_out content:**
 
@@ -348,115 +322,112 @@ Agent calls `add_reaction` tool with message ID and emoji. Agent-runner writes m
 { "text": "LGTM" }
 
 // Interactive card
-{ "operation": "ask_question", "title": "Deploy", "question": "Approve deployment?", "options": ["Yes", "No", "Defer"] }
+{ "type": "ask_question", "questionId": "q-1", "title": "Deploy", "question": "Approve deployment?", "options": [{ "label": "Yes", "selectedLabel": "Yes", "value": "Yes" }] }
 
 // Edit existing message
-{ "operation": "edit", "messageId": "3", "text": "Updated: LGTM with minor comments" }
+{ "operation": "edit", "messageId": "<platform message id>", "text": "Updated: LGTM with minor comments" }
 
 // Reaction
-{ "operation": "reaction", "messageId": "5", "emoji": "thumbs_up" }
+{ "operation": "reaction", "messageId": "<platform message id>", "emoji": "thumbs_up" }
 ```
 
-The host reads the `operation` field (if present) and calls the right adapter method. No operation field = normal message delivery. Platform capabilities vary — the host/bridge handles graceful degradation (e.g., reaction on a platform that doesn't support it → skip or send as text).
+The adapter reads the `operation` / `type` field (if present) and does the right thing. No such field = normal message delivery. Platform capabilities vary — the adapter handles graceful degradation.
 
 ### Agent-to-Agent Communication
 
-Sending a message to another agent uses the same routing fields as channel delivery. The agent-runner sets `channel_type: 'agent'` and `platform_id` to the target agent group ID. Optionally, `thread_id` can target a specific session (null = find or create the default session).
+Sending a message to another agent uses the same routing fields as channel delivery. The agent-runner sets `channel_type: 'agent'` and `platform_id` to the target agent group ID.
 
-From the sending agent's perspective, it's the same mechanism as sending to Slack or WhatsApp — just a messages_out row with different routing. The host reads it, checks that this agent group has permission to message the target, resolves the target session, and writes a messages_in row to that session's DB.
+From the sending agent's perspective, it's the same mechanism as sending to a chat — the agent addresses a named destination (`send_message` with `to`, or a `<message to="name">` block), and the agent-runner writes a messages_out row with different routing. The host reads it, checks `agent_destinations` to confirm this agent group may message the target, resolves the target session, and writes a messages_in row to that session's DB (`src/modules/agent-to-agent/agent-route.ts`).
 
 ```json
 // messages_out routing fields
-{ "kind": "chat", "channel_type": "agent", "platform_id": "pr-worker", "thread_id": null }
+{ "kind": "chat", "channel_type": "agent", "platform_id": "<target agent_group_id>", "thread_id": null }
 // messages_out content
-{ "text": "Reset your session and re-review", "sender": "Supervisor", "senderId": "agent:pr-admin" }
+{ "text": "Reset your session and re-review" }
 ```
 
-The receiving agent gets a normal chat message. It doesn't need to know the source is another agent unless that's relevant context.
+The receiving agent gets a normal chat message, attributed to the sending agent's destination name.
 
 ### Routing
 
-**Default behavior:** Agent-runner copies routing fields (`kind`, `platform_id`, `channel_type`, `thread_id`) from the messages_in row to messages_out. Response goes back where it came from.
+**Default behavior:** Each session has a default reply address in `inbound.db`'s `session_routing` table (written by the host on every wake). Tools that omit a destination use it; result text is routed by its `<message to="name">` blocks.
 
-**Host validation:** Before delivering, the host checks that this agent group is permitted to send to the destination. The agent-runner copies routing; the host validates.
+**Host validation:** Before delivering, the host checks that this agent group is permitted to send to the destination: replies to the session's own origin chat are always allowed; any other channel needs an `agent_destinations` row. The agent-runner picks the routing; the host validates.
 
-**Multi-destination pattern (customization):** An agent may need to send to a different channel than the origin (e.g., a webhook triggers a Slack notification). This is supported via custom code, not built into the core:
-
-1. Add a `destinations` table to the session DB mapping logical names to routing fields
-2. Populate it from the host when setting up the session
-3. Modify the agent's prompt to list available destinations
-4. Agent chooses a destination by name; agent-runner resolves to routing fields
-5. Host validates as usual
-
-This is documented as a pattern, not a built-in feature.
+**Named destinations (built in):** An agent can send to channels other than the origin. The host writes the agent group's destinations (from `agent_destinations`) into the session's `inbound.db` `destinations` table on every wake; the agent-runner lists them in the prompt and resolves names to routing fields; the host validates as usual. Wiring a messaging group to an agent group adds the destination row automatically.
 
 ## Core Properties
 - Container isolation via filesystem mounts
-- Credential proxy (OneCLI)
+- Credential proxy on the host (`src/credential-proxy.ts`) — containers never see the real API key
 - Per-agent-group workspace (folder, CLAUDE.md, skills)
 - Polling-based (not event-driven)
-- Per-agent-group agent-runner recompilation on container startup (agent can modify its own source, request rebuild/restart, changes persist across teardowns)
-- Host ↔ container IO through mounted session DBs (`messages_in` / `messages_out`) — no stdin piping, no IPC files
+- Agent-runner source is mounted read-only from `container/agent-runner/src/` and run directly by Bun — no build step in the container
+- Host ↔ container IO through mounted session DBs (`inbound.db` / `outbound.db`) — no stdin piping, no IPC files
 - Agent commands are `messages_out` rows with `kind: 'system'`
 - Agent-to-agent supported via target-agent routing on `messages_out`
-- Scheduling uses `process_after` / `deliver_after` + `recurrence` on the same message tables
-- Media via signed URLs, downloaded in the container
-- Channel adapters use the Chat SDK bridge + a standard interface (trunk ships only the bridge/registry; platform adapters install via `/add-<channel>` skills)
+- Scheduling uses `process_after` + `recurrence` on the same message tables
+- Media: adapter-supplied files saved to the session inbox; URLs passed through
+- Channel adapters use a standard interface; Chat SDK adapters go through the bridge. Only the CLI channel is wired by default
 - Routing: channel adapter extracts IDs, host maps to entities
-- Concurrency: Chat SDK per-channel + container limits
-- Session scoping: per-session DB, multiple sessions per agent group
+- Concurrency: Chat SDK per-channel + one container per session
+- Session scoping: per-session DBs, multiple sessions per agent group
 
 ## Design Decisions
 
-**Session DB location:** Not in the agent group folder. Separate directory (e.g., `sessions/{session_id}/`). Each session gets its own folder containing `session.db` and the Claude SDK's `.claude/` directory. The session identity IS the folder — no need to track Claude SDK session IDs.
+**Session folder location:** Not in the agent group folder. Separate directory: `data/v2-sessions/{agent_group_id}/{session_id}/`. Each session folder contains `inbound.db`, `outbound.db`, `outbox/`, `inbox/` and the `.heartbeat` file. The Claude SDK's state lives per agent group in `data/v2-sessions/{agent_group_id}/.claude-shared/` (mounted at `/home/node/.claude`); the SDK session ID to resume is stored in the session's `outbound.db` (`session_state`).
 
-**Container mount structure:**
+**Container mount structure** (`buildMounts()` in `src/container-runner.ts`):
 
 ```
 /workspace/                 ← mount: session folder (read-write)
-  .claude/                  ← Claude SDK session data (auto-created)
-  session.db                ← session SQLite DB
+  inbound.db                ← host-owned session DB
+  outbound.db               ← container-owned session DB
   outbox/                   ← agent-runner writes outbound files here
-  agent/                    ← mount: agent group folder (nested, read-write)
-    CLAUDE.md               ← agent instructions
-    skills/                 ← agent skills
+  inbox/                    ← host writes inbound attachments here
+  .heartbeat                ← touched by the agent-runner
+  agent/                    ← mount: agent group folder groups/<folder> (nested, read-write)
+    CLAUDE.md               ← composed instructions (read-only nested mount)
+    CLAUDE.local.md         ← per-group memory (read-write)
+    container.json          ← materialized container config (read-only nested mount)
     ... working files
+/home/node/.claude/         ← mount: per-group .claude-shared (Claude state, settings, skill symlinks)
+/app/src/                   ← mount: container/agent-runner/src (read-only)
+/app/skills/                ← mount: container/skills (read-only)
+/app/CLAUDE.md              ← mount: container/CLAUDE.md (read-only)
 ```
 
-Two directory mounts: session folder at `/workspace`, agent group folder at `/workspace/agent/`. The agent-runner CDs into `/workspace/agent/` to run the agent. Claude SDK writes `.claude/` at `/workspace/.claude/` (root of the workspace). The session DB is at `/workspace/session.db`.
+Plus any validated `additionalMounts` from the container config and mounts contributed by the provider. The agent-runner runs the agent in `/workspace/agent/`. Only Docker is supported as the container runtime (`src/container-runtime.ts`).
 
-This works on both Docker (nested bind mounts) and Apple Container (directory mounts only — no file-level mounts, but nested directory mounts are supported).
-
-**Session DB concurrent access:** The host writes messages_in, the agent-runner writes messages_out. Both access the same SQLite file simultaneously. WAL mode handles this — SQLite allows concurrent readers, and the two sides write to different tables so writer contention is minimal. The host enables WAL mode when creating the session DB.
+**Session DB concurrent access:** The host writes `inbound.db`, the agent-runner writes `outbound.db`. Each file has exactly one writer. Session DBs use `journal_mode=DELETE` (not WAL — WAL's memory-mapped `-shm` does not stay coherent across the container mount), and the host opens, writes and closes the DB on each operation. See the header of `src/session-manager.ts`.
 
 **Session management:** Host-managed. The host creates session folders and mounts them. The container only sees its own session folder.
 
 **Session creation (no race condition):**
 
-1. Message arrives, host checks central DB for a session matching this group + thread
-2. No session exists → host atomically creates session row in central DB, creates the session folder, creates the session DB, writes the message
-3. More messages arrive before container starts → host finds the existing session, writes to the same session DB
+1. Message arrives, router checks central DB for a session matching this agent group + messaging group + thread
+2. No session exists → host creates session row in central DB, creates the session folder, creates both session DBs, writes the message
+3. More messages arrive before container starts → host finds the existing session, writes to the same inbound DB
 4. Container starts, mounts the folder, agent-runner finds messages waiting
 
-The central DB session row creation is the serialization point. No Claude SDK session ID to coordinate — the SDK discovers its own session data in `.claude/` when the agent runs.
+The central DB session row creation is the serialization point.
 
-**System actions:** The agent uses MCP tools (register group, reset session, schedule task, etc.). The agent-runner handles these tool calls and writes a structured, deterministic messages_out row with `kind: 'system'`. This is not natural language — it's a programmatic, structured payload that the host processes deterministically. Host validates permissions, executes, and writes the result back as a `system` messages_in row.
+**System actions:** The agent uses MCP tools (schedule task, create agent, `ncl` requests, etc.). The agent-runner handles these tool calls and writes a structured, deterministic messages_out row with `kind: 'system'`. This is not natural language — it's a programmatic, structured payload that the host processes deterministically. Host validates permissions, executes, and notifies the agent by writing to its messages_in.
 
-**Container lifecycle:** No warm pool. Containers are spawned on demand (wakeUpAgent) and torn down from the outside by the host when idle. Existing idle detection + teardown mechanism carries over.
+**Container lifecycle:** No warm pool. Containers are spawned on demand (`wakeContainer`) and torn down from the outside by the host sweep when stuck or idle past the heartbeat ceiling.
 
 ## Operational Behavior
 
 ### Output Delivery
 
-NanoMika does not stream tokens to users. The Claude Agent SDK's `query()` yields complete results. The agent-runner writes one complete message to messages_out per result. The host delivers complete messages to channels.
+NanoMika does not stream tokens to users. The agent-runner reads complete results from the provider, splits the result text into `<message to="name">` blocks, and writes one messages_out row per block. Text outside those blocks (and `<internal>` blocks) is scratchpad and is not sent. The host delivers complete messages to channels.
 
 Message editing is supported as an explicit operation (agent calls an `edit_message` tool), not as a streaming mechanism.
 
-Typing indicators: host sets typing when a container is active for a session, clears when the container exits or a response appears in messages_out.
+Typing indicators: the host starts a typing refresh when it wakes a container for a session (`src/modules/typing/`), pauses it briefly after each delivered message, and stops it when the container exits.
 
 ### Message Batching
 
-When multiple messages arrive while the container is down, they accumulate as `handled = 0` rows in messages_in. When the container wakes up, the agent-runner queries all unhandled messages and processes them as a batch — multiple messages are formatted into a single `<messages>` XML block.
+When multiple messages arrive while the container is down, they accumulate as `pending` rows in messages_in. When the container wakes up, the agent-runner queries pending messages (up to `maxMessagesPerPrompt`, default 10) and processes them as a batch — each message becomes its own `<message>` XML element in one prompt. Messages that arrive while a query is running are pushed into the active query.
 
 ### Message Lifecycle
 
@@ -466,11 +437,11 @@ pending → processing → completed
 ```
 
 - **pending**: Written by host. Ready to be picked up (if `process_after` is null or past).
-- **processing**: Agent-runner sets this when it picks up the message. `status_changed` is set to now. Prevents other polls from re-picking the same message.
-- **completed**: Agent-runner sets this after successful processing.
-- **failed**: Set after max retries exhausted.
+- **processing**: Agent-runner records this in `processing_ack` when it picks up the message; the host sweep copies it to `messages_in.status`.
+- **completed**: Agent-runner records this after processing.
+- **failed**: Set by the host after max retries exhausted.
 
-**Stale detection**: If a message is `processing` but `status_changed` is too old (e.g., >10 minutes), the host assumes the container crashed. It resets the message to `pending`, increments `tries`, and sets `process_after` with exponential backoff.
+**Stale detection**: If a running container claimed a message more than 60s ago (longer while a Bash tool with a longer declared timeout is running) and its heartbeat hasn't moved since the claim, or its heartbeat is older than 30 minutes, the host kills the container. Claimed messages of a dead or killed container are reset to `pending` with `tries` incremented and `process_after` pushed out with exponential backoff.
 
 ### Error Handling and Retries
 
@@ -481,92 +452,65 @@ Retries use `process_after` with exponential backoff. Each retry increments `tri
 - Try 3: +10s
 - Try 4: +20s
 - Try 5: +40s
+- Try 6: +80s
 - After max retries: status set to `failed`
 
-The host computes this — not the agent-runner. When the host detects a stale `processing` message or the container exits with an error, it increments `tries`, computes the next `process_after`, and resets status to `pending`.
+The host computes this — not the agent-runner. When the host detects a stuck claim or a claimed message whose container is gone, it increments `tries`, computes the next `process_after`, and resets status to `pending`.
 
-**Output-sent protection**: If messages_out already has delivered rows for a batch, don't retry (prevents duplicate messages to user).
+Delivery failures are retried separately: the host tries each messages_out row up to 3 times, then marks it `failed` in `delivered`.
 
 ### Host Polling
 
 Two tiers:
-- **Active containers (~1s)**: Poll session DBs for new messages_out rows to deliver
-- **All sessions (~60s)**: Sweep all session DBs for due `process_after` / `deliver_after` timestamps, handle recurrence
+- **Running containers (~1s)**: Poll session outbound DBs for new messages_out rows to deliver
+- **All active sessions (~60s)**: Deliver anything left over, sync processing claims, wake for due `process_after` timestamps, enforce stuck rules, handle recurrence
 
 ## Flexibility Model
 
-The architecture is **flexible for code changes, not configurable for everything**. Advanced setups (like the PR Factory below) use custom routing logic and host-side hooks — not database config columns.
+The architecture is **flexible for code changes, not configurable for everything**. Advanced setups use custom routing logic and host-side hooks — not database config columns.
 
-### Code Structure for Skill Customization
+### Code Structure for Customization
 
-NanoMika is customized via skills — branches that get merged into the user's installation. Different skills add different capabilities (channels, integrations, behaviors). The code must be structured so that:
+NanoMika is customized by changing its code. The code is structured so that:
 
-1. **Different customizations don't conflict.** Adding Slack and adding Telegram should not produce merge conflicts. Adding a new MCP tool should not conflict with adding a channel. Each type of customization should touch its own file(s).
+1. **Different customizations don't conflict.** Adding a channel should not touch the same lines as adding an MCP tool. Each type of customization touches its own file(s).
 
-2. **Core blocks of functionality are in separate files.** Channel registration, message formatting, MCP tools, routing logic, container management — each in its own file. A skill that changes how messages are formatted doesn't touch the file that handles container spawning.
+2. **Core blocks of functionality are in separate files.** Channel registration, message formatting, MCP tools, routing logic, container management — each in its own file. A change to how messages are formatted doesn't touch the file that handles container spawning.
 
-3. **The index file is thin.** It wires things together (init DB, start adapters, start poll loops) but contains no business logic. All logic lives in purpose-specific modules that skills can modify independently.
+3. **The index file is thin.** `src/index.ts` wires things together (preflight, init DB, start adapters, start poll loops) but contains no business logic. Logic lives in purpose-specific modules (router, delivery, session-manager, host-sweep, `src/modules/*`).
 
-4. **Don't over-split.** A simple change (e.g., adding a new message kind) shouldn't require edits across 5 files. Group related logic together. The goal is that each skill touches 1-2 files for its core change.
+4. **Don't over-split.** A simple change (e.g., adding a new message kind) shouldn't require edits across 5 files. Group related logic together.
 
-5. **Registration patterns over switch statements.** Channels, MCP tools, and providers should use registration/plugin patterns. A skill adds a channel by adding a file and a registration call — not by editing a central switch statement alongside every other channel.
+5. **Registration patterns over switch statements.** Channels (`registerChannelAdapter`), MCP tools (`registerTools`), providers (`registerProvider`), host modules, delivery actions (`registerDeliveryAction`) and approval handlers (`registerApprovalHandler`) use registration patterns. Adding one means adding a file and a registration call — not editing a central switch statement.
 
-**Practical example:** Adding a new channel via skill should require:
-- One new file (the channel adapter or Chat SDK config)
-- One line in the barrel file (`channels/index.ts`) to import the self-registering module
+**Practical example:** Adding a new channel requires:
+- One new file (the channel adapter, native or via the Chat SDK bridge)
+- One line in the barrel file (`src/channels/index.ts`) to import the self-registering module
 - Zero changes to routing, formatting, delivery, or container code
 
-### Conflict Hotspots and Solutions
+See [writing-a-channel.md](writing-a-channel.md).
 
-Analysis of 33 skill branches shows these files cause the most merge conflicts:
+**Provider mount registration:** Providers that need host-side container setup register a contribution with `src/providers/provider-container-registry.ts` (extra mounts, env vars). The container runner collects the contribution for the session's provider — no need to edit `container-runner.ts`.
 
-| Hotspot | Why it conflicts | Solution |
-|-----------|-----------------|-------------|
-| `src/index.ts` (2000 LOC) | Every skill patches the main loop, imports, init logic | Thin index that wires modules. Logic lives in purpose-specific files (router, delivery, session-manager, host-sweep). |
-| `src/config.ts` | Every skill adds env vars to a central file | Config declared where it's used. Each module reads its own env vars. No central config registry that every skill edits. |
-| `src/container-runner.ts` | Channel skills add mounts, env vars, credential setup | Declarative mount registration. Channels declare their mounts in their own file. Container runner reads from a registry, not a hardcoded list. |
-| `src/db.ts` (750 LOC) | Schema, migrations, and all CRUD in one file | Split by entity. Numbered migrations. Skills add a migration file + edit one entity file. |
-| `container/agent-runner/src/index.ts` | Agent protocol, IPC handling, formatting all in one file | Split into poll-loop, formatter, providers/, mcp-tools/. Session DB replaces IPC. |
-| `src/ipc.ts` | Every MCP tool addition patches one file | `mcp-tools/` directory with barrel. Skills add a tool file + barrel line. |
-| `src/channels/index.ts` | Every channel adds an import line at the same location | Barrel file with comment slots per channel (current pattern works, keep it). |
-
-**Mount registration pattern:** Instead of every channel skill editing `buildVolumeMounts()`, channels declare mounts that the container runner collects:
+**Config pattern:** Each channel module reads its own env vars directly from `.env`:
 
 ```typescript
-// channels/gmail.ts
-registerChannel('gmail', {
-  factory: createGmailAdapter,
-  mounts: [
-    { hostPath: '~/.gmail-mcp', containerPath: '/home/node/.gmail-mcp', readonly: false }
-  ],
-  env: ['GMAIL_OAUTH_TOKEN'],
-});
+// src/channels/slack.ts
+const env = readEnvFile(['SLACK_BOT_TOKEN', 'SLACK_SIGNING_SECRET', 'SLACK_APP_TOKEN']);
 ```
 
-The container runner reads registered mounts from the channel registry — no need to edit `container-runner.ts`.
-
-**Config pattern:** Skills don't patch `config.ts` or `.env.example`. Skill-specific env vars are documented in the skill's SKILL.md — the setup process reads those instructions. Each module reads its own env vars directly:
-
-```typescript
-// channels/discord.ts
-const DISCORD_TOKEN = process.env.DISCORD_BOT_TOKEN;
-
-// channels/gmail.ts  
-const GMAIL_CREDS = process.env.GMAIL_CREDENTIALS_PATH;
-```
-
-Shared config (DATA_DIR, TIMEZONE, MAX_CONCURRENT_CONTAINERS) stays in `config.ts`. Channel/skill-specific config stays in the module that uses it.
+Shared config (DATA_DIR, TIMEZONE, CREDENTIAL_PROXY_PORT, …) stays in `src/config.ts`. Channel-specific config stays in the module that uses it.
 
 ### Code Style
 
 **Line width: 120 characters.** Most statements fit on one line without sacrificing readability.
 
-**Concise logging.** A thin wrapper keeps every log call on one line:
+**Concise logging.** A thin wrapper (`src/log.ts`) keeps every log call on one line:
 
 ```typescript
-log.info('IPC message sent', { chatJid, sourceGroup });
-log.warn('Unauthorized IPC attempt', { chatJid });
-log.error('Error processing', { file, err });
+log.info('Message routed', { sessionId, agentGroup });
+log.warn('Message delivery failed, will retry', { messageId, attempt });
+log.error('Container spawn error', { sessionId, err });
 ```
 
 ### DB File Structure
@@ -575,113 +519,86 @@ The DB layer is split by entity rather than kept in one monolithic file:
 
 ```
 src/db/
-  connection.ts              ← singleton, init, WAL mode
-  schema.ts                  ← CREATE TABLE statements (current state, for reference)
+  connection.ts              ← singleton, init, WAL mode (central DB only)
+  schema.ts                  ← per-session schemas (inbound.db, outbound.db)
   migrations/
-    index.ts                 ← runner: checks version, applies pending
+    index.ts                 ← runner: checks schema_version, applies pending
     001-initial.ts           ← initial schema
-    002-pending-questions.ts ← example: adds pending_questions table
-    ...                      ← skills append new numbered files
+    002-chat-sdk-state.ts    ← Chat SDK state tables
+    ...                      ← numbered core migrations + module-*.ts module migrations
   agent-groups.ts            ← CRUD for agent_groups
   messaging-groups.ts        ← CRUD for messaging_groups + messaging_group_agents
   sessions.ts                ← CRUD for sessions + pending_questions
-  index.ts                   ← barrel: re-exports everything
+  container-configs.ts       ← CRUD for container_configs
+  dropped-messages.ts        ← audit log of dropped messages
+  session-db.ts              ← inbound.db / outbound.db helpers
+  index.ts                   ← barrel: re-exports
 ```
 
+Module-owned tables have their CRUD inside the module (e.g. `src/modules/permissions/db/`, `src/modules/agent-to-agent/db/`).
+
 **Principles:**
-- **Split by entity, not by layer.** Each entity file has its own CRUD functions (~50-100 lines). A skill that adds a column to messaging_groups edits `messaging-groups.ts` — doesn't touch sessions or agent groups.
-- **Schema as current state + migrations as history.** `schema.ts` documents what the DB looks like now (read this to understand the schema). Migrations are append-only numbered files that describe how we got here.
-- **No inline ALTER TABLE.** A migration runner with a `schema_version` table replaces `try { ALTER TABLE } catch { /* exists */ }` blocks. On startup, it checks the current version and applies pending migrations in order. Each migration is a function: `(db: Database) => void`.
-- **Skills add migrations.** A skill that needs a new column adds a new numbered migration file. No conflicts with other skills' migrations as long as numbers don't collide (use timestamps or high-enough numbers for skill branches).
+- **Split by entity, not by layer.** Each entity file has its own CRUD functions. A change that adds a column to messaging_groups edits `messaging-groups.ts` — doesn't touch sessions or agent groups.
+- **Migrations define the central schema.** They are append-only files; [db-central.md](db-central.md) describes the resulting tables. The per-session schemas are plain constants in `schema.ts`.
+- **Migration runner.** A `schema_version` table records applied migrations. On startup, the runner applies pending migrations in order. Each migration is a function: `(db: Database) => void`.
+- **Modules add migrations.** A module that needs a new table adds its own migration file (`module-<name>-<what>.ts`) to the list.
 
 **Agent-runner session DB** uses the same pattern but lighter — no migrations needed since session DBs are created fresh by the host:
 
 ```
 container/agent-runner/src/db/
-  connection.ts          ← open session.db at fixed path, WAL mode
-  messages-in.ts         ← read pending, update status
-  messages-out.ts        ← write results, outbox queries
+  connection.ts          ← open inbound.db (read-only) + outbound.db at fixed paths, heartbeat
+  messages-in.ts         ← read pending, record processing status
+  messages-out.ts        ← write results
+  session-routing.ts     ← default reply routing
+  session-state.ts       ← persisted SDK session ID
   index.ts               ← barrel
 ```
 
-### What the base architecture must support primitively
+### What the base architecture supports primitively
 
 These are the building blocks. None require special abstractions — they fall out of per-session DBs, host-managed routing, and messages_out with `kind: 'system'`:
 
-1. **Multiple agent groups on the same channel with content-based routing.** Different messages in the same thread can route to different agent groups based on content (e.g., @mention routes to supervisor, normal messages route to worker). The channel adapter's routing logic — custom code — decides.
+1. **Multiple agent groups on the same channel with content-based routing.** Several agent groups can be wired to one messaging group; each wiring's `engage_mode` / `engage_pattern` decides independently whether that agent engages (fan-out, ordered by `priority`).
 
-2. **Per-thread sessions from a shared agent group.** Multiple sessions share the same agent group (filesystem, skills, CLAUDE.md) but each gets its own session DB. Standard for worker pools.
+2. **Per-thread sessions from a shared agent group.** Multiple sessions share the same agent group (filesystem, skills, CLAUDE.md) but each gets its own session DBs.
 
-3. **Session reset and replay.** Create a new session for the same thread. Mark old messages as unhandled so the poll picks them up again. Old output stays visible in the platform (e.g., Discord thread) for comparison. This is an action an agent can request — not automatic.
-
-4. **Cross-session read access.** Some agents can query other sessions' data. Different access levels: manager sees messages_in/messages_out (review content). Supervisor sees full internals (agent logs, tool calls, debug traces). This is just filesystem/DB access — mount or query the right paths.
-
-5. **Context duplication into new sessions.** When a supervisor is invoked in a worker's thread, a new session is created with relevant messages copied in. Custom host-side code handles this.
-
-6. **Agent-initiated host actions.** The agent uses MCP tools (reset session, update skills, etc.). The agent-runner handles the tool call and writes a structured `system` messages_out row. The host reads and executes with permission checks. The agent can request, but the host decides.
-
-### Example: PR Factory
-
-Three agent groups, one Discord channel (PR Factory), plus an admin channel:
-
-| Role | Agent Group | Where | Session model |
-|------|-------------|-------|---------------|
-| **Worker** | pr-worker | PR Factory threads | One session per thread (per PR) |
-| **Manager** | pr-manager | PR Factory channel | Single session, queries across worker sessions |
-| **Supervisor** | pr-admin | Admin channel + PR Factory (when @tagged) | Main session in admin channel; per-thread session when invoked in worker threads |
-
-**Worker flow:** GitHub PR → Discord thread → worker agent reviews (triage, review, test plan). Each thread gets a session from the shared pr-worker group.
-
-**Feedback flow:** User @tags supervisor in worker threads → custom routing sends to supervisor with a new session containing the thread's messages (duplicated). Supervisor collects feedback to filesystem. Worker doesn't see supervisor messages.
-
-**Iteration flow:** User discusses feedback with supervisor in admin channel → supervisor suggests skill changes (shown as rich card with diff) → user approves → supervisor applies changes via host action → supervisor requests session reset + replay → workers re-review same PRs with updated skills in same threads but fresh sessions → user compares reviews side by side.
-
-**Manager flow:** User talks to manager in PR Factory main channel (not in threads). Manager can search across all worker session DBs (messages_in/messages_out) to answer questions like "how many PRs today?" or "what topics are trending?" Can request actions (close PR, re-open).
-
-**What's custom code vs. base architecture:**
-
-| Capability | Base architecture | Custom code (PR Factory) |
-|-----------|-------------------|-------------------------|
-| Per-thread sessions | ✓ platformThreadId → session | |
-| Shared agent group across sessions | ✓ Multiple sessions, one group | |
-| Writing messages to session DB | ✓ Standard flow | |
-| @mention routing to different agent | | ✓ Channel adapter routing logic |
-| Context duplication into supervisor session | | ✓ Host-side hook on supervisor invocation |
-| Session reset + replay | ✓ Primitives (new session, mark unhandled) | ✓ Supervisor action triggers it |
-| Skill updates | ✓ Filesystem writes | ✓ Supervisor action applies changes |
-| Cross-session queries | ✓ DB/filesystem access | ✓ Manager's tools know where to look |
-| Rich card output | ✓ Structured output in messages_out | |
+3. **Agent-initiated host actions.** The agent uses MCP tools (schedule task, create agent, `ncl` requests, etc.). The agent-runner handles the tool call and writes a structured `system` messages_out row. The host reads and executes with permission checks. The agent can request, but the host decides.
 
 ## Central DB Schema
 
-The central DB handles routing and entity management. All content and execution state lives in per-session DBs.
+The central DB handles routing and entity management. All content and execution state lives in per-session DBs. Core tables (every table is described in [db-central.md](db-central.md)):
 
 ```sql
--- Agent workspaces: folder, skills, CLAUDE.md, container config
+-- Agent workspaces: folder, skills, CLAUDE.md
 CREATE TABLE agent_groups (
   id               TEXT PRIMARY KEY,
   name             TEXT NOT NULL,
   folder           TEXT NOT NULL UNIQUE,
   agent_provider   TEXT,              -- default for sessions (null = system default)
-  container_config TEXT,              -- JSON: { additionalMounts, timeout }
   created_at       TEXT NOT NULL
 );
 
--- Platform groups/channels (WhatsApp group, Slack channel, Discord channel, email thread, etc.)
+-- Per-agent-group container config (provider, model, packages, MCP servers, mounts, skills)
+-- container_configs (agent_group_id PK, provider, model, effort, image_tag, assistant_name,
+--   max_messages_per_prompt, skills, mcp_servers, packages_apt, packages_npm, additional_mounts, ...)
+
+-- Platform groups/channels (one chat on one platform)
 CREATE TABLE messaging_groups (
   id                     TEXT PRIMARY KEY,
-  channel_type           TEXT NOT NULL,     -- 'whatsapp', 'slack', 'discord', 'telegram', 'email'
-  platform_id            TEXT NOT NULL,     -- platform-specific ID (JID, channel ID, etc.)
+  channel_type           TEXT NOT NULL,     -- e.g. 'cli', 'slack'
+  platform_id            TEXT NOT NULL,     -- platform-specific ID
   name                   TEXT,
   is_group               INTEGER DEFAULT 0,
   unknown_sender_policy  TEXT NOT NULL DEFAULT 'strict',  -- 'strict' | 'request_approval' | 'public'
+  denied_at              TEXT,              -- set when an owner denies channel registration
   created_at             TEXT NOT NULL,
   UNIQUE(channel_type, platform_id)
 );
 
 -- Users (messaging platform identities, namespaced "<channel_type>:<handle>")
 CREATE TABLE users (
-  id           TEXT PRIMARY KEY,   -- e.g. 'telegram:123456', 'discord:1470...'
+  id           TEXT PRIMARY KEY,   -- e.g. 'cli:local'
   kind         TEXT NOT NULL,      -- mirrors the channel_type prefix
   display_name TEXT,
   created_at   TEXT NOT NULL
@@ -692,17 +609,17 @@ CREATE TABLE user_roles (
   user_id         TEXT NOT NULL REFERENCES users(id),
   role            TEXT NOT NULL,   -- 'owner' | 'admin'
   agent_group_id  TEXT REFERENCES agent_groups(id),  -- NULL for global
-  granted_by      TEXT,
+  granted_by      TEXT REFERENCES users(id),
   granted_at      TEXT NOT NULL,
   PRIMARY KEY (user_id, role, agent_group_id)
 );
--- owner rows must have agent_group_id = NULL (enforced in db/user-roles.ts)
+-- owner rows must have agent_group_id = NULL (enforced in src/modules/permissions/db/user-roles.ts)
 
 -- Membership (explicit non-privileged access; admin/owner imply membership)
 CREATE TABLE agent_group_members (
   user_id         TEXT NOT NULL REFERENCES users(id),
   agent_group_id  TEXT NOT NULL REFERENCES agent_groups(id),
-  added_by        TEXT,
+  added_by        TEXT REFERENCES users(id),
   added_at        TEXT NOT NULL,
   PRIMARY KEY (user_id, agent_group_id)
 );
@@ -718,25 +635,29 @@ CREATE TABLE user_dms (
 
 -- Which agent groups handle which messaging groups, with what rules
 CREATE TABLE messaging_group_agents (
-  id                 TEXT PRIMARY KEY,
-  messaging_group_id TEXT NOT NULL REFERENCES messaging_groups(id),
-  agent_group_id     TEXT NOT NULL REFERENCES agent_groups(id),
-  trigger_rules      TEXT,              -- JSON: { pattern, mentionOnly, excludeSenders, includeSenders }
-  response_scope     TEXT DEFAULT 'all',    -- 'all' | 'triggered' | 'allowlisted'
-  session_mode       TEXT DEFAULT 'shared', -- 'shared' | 'per-thread'
-  priority           INTEGER DEFAULT 0,     -- higher = checked first when multiple agents match
-  created_at         TEXT NOT NULL,
+  id                     TEXT PRIMARY KEY,
+  messaging_group_id     TEXT NOT NULL REFERENCES messaging_groups(id),
+  agent_group_id         TEXT NOT NULL REFERENCES agent_groups(id),
+  engage_mode            TEXT,                             -- 'pattern' | 'mention' | 'mention-sticky'
+  engage_pattern         TEXT,                             -- regex for 'pattern'; '.' = every message
+  sender_scope           TEXT,                             -- 'all' | 'known'
+  ignored_message_policy TEXT,                             -- 'drop' | 'accumulate'
+  session_mode           TEXT DEFAULT 'shared',            -- 'shared' | 'per-thread' | 'agent-shared'
+  priority               INTEGER DEFAULT 0,
+  created_at             TEXT NOT NULL,
   UNIQUE(messaging_group_id, agent_group_id)
 );
+-- engage_mode, sender_scope and ignored_message_policy have no SQL default.
+-- Callers always set them; `ncl wirings create` defaults to mention / all / drop.
 
 -- Sessions: one folder = one session = one container when running
--- Folder path is derived: sessions/{agent_group_id}/{session_id}/
+-- Folder path is derived: data/v2-sessions/{agent_group_id}/{session_id}/
 CREATE TABLE sessions (
   id                 TEXT PRIMARY KEY,
   agent_group_id     TEXT NOT NULL REFERENCES agent_groups(id),
   messaging_group_id TEXT REFERENCES messaging_groups(id),  -- null for internal/spawned sessions
   thread_id          TEXT,              -- platform thread ID (null for shared session mode)
-  agent_provider     TEXT,              -- override per session (null = inherit from agent_group)
+  agent_provider     TEXT,              -- override per session (null = inherit)
   status             TEXT DEFAULT 'active',    -- 'active' | 'closed'
   container_status   TEXT DEFAULT 'stopped',   -- 'running' | 'idle' | 'stopped'
   last_active        TEXT,              -- last message activity timestamp
@@ -754,158 +675,144 @@ CREATE TABLE pending_questions (
   platform_id    TEXT,              -- where the card was delivered
   channel_type   TEXT,
   thread_id      TEXT,
+  title          TEXT NOT NULL,
+  options_json   TEXT NOT NULL,
   created_at     TEXT NOT NULL
 );
 ```
 
+Other tables: `pending_approvals` (approvals module), `agent_destinations` (agent-to-agent module), `pending_sender_approvals` and `pending_channel_approvals` (permissions module), `unregistered_senders` (dropped-message audit), `chat_sdk_*` (Chat SDK state), `schema_version`.
+
 ### Pending Question Flow
 
-When the host delivers a messages_out row with `operation: 'ask_question'`:
-1. Host delivers the card via the channel adapter
-2. Host writes a `pending_questions` row mapping `question_id` → `session_id`
+When the host delivers a messages_out row whose content has `type: 'ask_question'`:
+1. Host writes a `pending_questions` row mapping `question_id` → `session_id`
+2. Host delivers the card via the channel adapter
 
-When a Chat SDK `ActionEvent` (button click) arrives:
-1. Bridge extracts `actionId` from the event
-2. Host looks up `pending_questions` by `question_id` (derived from actionId — the bridge maintains the mapping)
-3. Host finds the target session, writes a messages_in row with `questionId` + `selectedOption`
-4. Host deletes the `pending_questions` row
-5. Agent-runner picks up the messages_in row, matches to the pending tool call, returns the selection
+When the user answers (a Chat SDK button click, or `/answer` on the CLI):
+1. The adapter calls `onAction(questionId, selectedOption, userId)`
+2. The host passes the response to the registered response handlers; the interactive module (`src/modules/interactive/`) looks up `pending_questions` by `question_id`
+3. It finds the target session, writes a `question_response` system row with `questionId` + `selectedOption` to its messages_in, and wakes the container
+4. It deletes the `pending_questions` row
+5. Agent-runner's waiting `ask_user_question` call picks up the row and returns the selection
 
 This avoids scanning session DBs. The central DB is the routing lookup — same pattern as message routing.
 
-Also used for host-generated approval cards: when the host sends an approval request to the admin's DM, it writes a `pending_questions` row. The admin's response is routed back to the originating session.
+Host-generated approval cards use the same `onAction` path but are claimed by the approvals module from `pending_approvals`.
 
 ### Container lifecycle states
 
 ```
-stopped → running → idle → stopped
-                  ↗
-            idle → running (new message while warm)
+stopped → running → stopped
 ```
 
-- **stopped**: No container. Swept at 60s for due scheduled messages.
-- **running**: Actively processing. Polled at 1s for messages_out.
-- **idle**: Done processing, container still warm (up to 30 min timeout). Polled at 1s so new messages are picked up quickly.
-- After idle timeout → host kills container → stopped.
+- **stopped**: No container. Swept every 60s for due scheduled messages.
+- **running**: Container process alive. Polled every 1s for messages_out. Stays up between turns until it exits or the host sweep kills it (heartbeat older than 30 min, or a stuck claim).
 
 ## Agent-Runner Architecture
 
-The agent-runner is the process inside the container. It mediates between the session DB and the Claude SDK — polling for work, formatting messages for the agent, translating tool calls into DB rows, and managing the agent lifecycle.
+The agent-runner is the process inside the container (`container/agent-runner/src/`, run by Bun). It mediates between the session DBs and the Claude Agent SDK — polling for work, formatting messages for the agent, translating tool calls into DB rows, and managing the agent lifecycle.
 
 ### IO Model
 
-All IO goes through the session DB. No stdin, no stdout markers, no IPC files.
+All IO goes through the session DBs. No stdin, no stdout markers, no IPC files.
 
 - Initial input and follow-ups: poll `messages_in`
 - Output: write `messages_out` rows
 - MCP tools: write DB rows (no IPC files)
-- Shutdown: host kills the container on idle timeout, or the agent-runner exits when there's no pending work
+- Liveness: touch `/workspace/.heartbeat`
+- Shutdown: the host kills the container; the poll loop itself runs until the process is killed
 
 ### Poll Loop
 
-1. Query `messages_in WHERE status = 'pending' AND (process_after IS NULL OR process_after <= now())`
-2. If rows found: set `status = 'processing'`, `status_changed = now()` on each
-3. Batch messages into a single prompt (strip routing fields, format by kind)
-4. Push into Claude SDK's MessageStream
-5. Process agent output → write `messages_out` rows
-6. Set processed messages to `status = 'completed'`
-7. Back to step 1. If no messages found, sleep briefly and re-poll (container stays warm for idle timeout)
+1. Query `messages_in` for pending rows (`process_after` NULL or past), skipping `system` rows
+2. If none, or only `trigger = 0` rows, sleep 1s and re-poll
+3. Record the batch as `processing` in `processing_ack`
+4. Handle `/clear` directly; run pre-task scripts for `task` rows
+5. Format the rest into a single prompt (strip routing fields, format by kind) and start a provider query
+6. While the query runs, poll every 500ms and push follow-up messages into it
+7. On each result, split the text into `<message to="name">` blocks → write `messages_out` rows; mark the batch `completed`
+8. Back to step 1
 
 ### Message Formatting by Kind
 
-Agent-runner strips routing fields (`platform_id`, `channel_type`, `thread_id`) before formatting. The agent never sees routing info — it only sees content.
+Agent-runner strips routing fields (`platform_id`, `channel_type`, `thread_id`) before formatting. The agent never sees routing info — it sees content plus a `from="<destination name>"` attribute. Every prompt starts with a `<context timezone="..."/>` header.
 
-- **`chat`** — format into `<messages>` XML block
-- **`chat-sdk`** — extract text, author, attachments from serialized message; format into `<messages>` XML
-- **`task`** — format as `[SCHEDULED TASK]` prefix + prompt. Run pre-script if present.
-- **`webhook`** — format as `[WEBHOOK: source/event]` + JSON payload
-- **`system`** — host action results (e.g., "register_group succeeded"). Format as system context, not chat.
+- **`chat`** / **`chat-sdk`** — one `<message id="<seq>" from="..." sender="..." time="...">` element per message, with attachments and quoted replies inline
+- **`task`** — `<task>` element with the script output (if any) and the instructions
+- **`webhook`** — `<webhook source="..." event="...">` + JSON payload
+- **`system`** — skipped by the poll loop; read by the tool waiting for it (e.g. `ask_user_question`)
 
-Mixed batches (e.g., a chat message + a system result both pending) are combined into one prompt with clear delimiters.
+Mixed batches are combined into one prompt.
 
 ### MCP Tools
 
-MCP tools write directly to the session DB.
-
-**Core tools:**
+MCP tools write directly to the session DBs (`container/agent-runner/src/mcp-tools/`).
 
 | Tool | What it does |
 |------|-------------|
-| `send_message` | Write `messages_out` row, `kind: 'chat'` |
-| `send_file` | Move file to `outbox/{msg_id}/`, write `messages_out` with filenames |
-| `schedule_task` | Write `messages_in` row (to self) with `process_after` + `recurrence`. Or `messages_out` with `deliver_after` for outbound reminders. |
-| `list_tasks` | Query `messages_in WHERE recurrence IS NOT NULL` |
-| `pause_task` / `resume_task` / `cancel_task` | Modify `messages_in` rows (update status, clear/set recurrence) |
-| `register_agent_group` | Write `messages_out`, `kind: 'system'`, `action: 'register_agent_group'` |
-
-**New tools:**
-
-| Tool | What it does |
-|------|-------------|
-| `ask_user_question` | Write `messages_out` with question card. Hold tool call open, poll `messages_in` for response matching `questionId`. Return selection as tool result. |
+| `send_message` | Write `messages_out` row, `kind: 'chat'`, to a named destination (default: session routing) |
+| `send_file` | Copy file to `outbox/{msg_id}/`, write `messages_out` with filenames |
 | `edit_message` | Write `messages_out` with `operation: 'edit'` |
 | `add_reaction` | Write `messages_out` with `operation: 'reaction'` |
-| `send_to_agent` | Write `messages_out` with `channel_type: 'agent'`, `platform_id: '{target}'` |
+| `schedule_task` | Write `messages_out`, `kind: 'system'`, `action: 'schedule_task'`; host inserts the task into `messages_in` |
+| `list_tasks` | Query `messages_in` for live task series |
+| `update_task` / `pause_task` / `resume_task` / `cancel_task` | Write `system` actions; host updates the task rows |
+| `ask_user_question` | Write `messages_out` with question card. Hold tool call open, poll `messages_in` for the matching `question_response`. Return selection as tool result. |
 | `send_card` | Write `messages_out` with card structure |
+| `create_agent` | Write `messages_out`, `kind: 'system'`, `action: 'create_agent'`; host creates the agent group and wires destinations both ways |
 
 See [agent-runner-details.md](agent-runner-details.md) for full MCP tool parameter definitions.
 
 ### Cards
 
-**Agent-initiated (outbound):** Tool-based. Agent calls `ask_user_question` (interactive card with options) or `send_card` (structured card). Agent-runner writes the card structure to messages_out. Host/adapter handles platform-specific rendering (Slack Block Kit, Discord embeds, Telegram inline keyboard, text fallback).
+**Agent-initiated (outbound):** Tool-based. Agent calls `ask_user_question` (interactive card with options) or `send_card` (structured card). Agent-runner writes the card structure to messages_out. The adapter handles platform-specific rendering (Slack Block Kit on Slack, numbered text options on the CLI, text fallback elsewhere).
 
-**Host-initiated (approval cards):** When an action requires approval, the host generates a standardized approval card and sends it to the admin's DM. These are not agent-initiated — the agent doesn't know about the approval step. The card format is fixed (action description + approve/deny buttons).
+**Host-initiated (approval cards):** When an action requires approval, the host generates an approval card and sends it to the approver's DM. These are not agent-initiated — the agent doesn't know about the approval step.
 
-**Inbound (card responses):** Not a card — it's a messages_in row with `questionId` + `selectedOption` in the content. Agent-runner matches to the pending `ask_user_question` tool call and returns the selection as the tool result.
+**Inbound (card responses):** Not a card — it's a messages_in row with `questionId` + `selectedOption` in the content. Agent-runner matches it to the pending `ask_user_question` tool call and returns the selection as the tool result.
 
 ### Commands
 
-Messages starting with `/` are checked against three lists:
-
-**Whitelisted commands (pass-through to agent):**
-- Standard slash commands that the agent provider handles natively (e.g., Claude's built-in commands)
-- Passed raw, no `<messages>` XML wrapping
-
-**Admin-only commands (require admin sender):**
-- `/remote-control` — remote control session
-- `/clear` — clear session context
-- `/compact` — force context compaction
-- If sent by a non-admin user, the command is rejected with an error message. Not forwarded to the agent.
+Messages starting with `/` are classified on the host by `src/command-gate.ts` before they reach the container:
 
 **Filtered commands (dropped entirely):**
-- Commands that don't make sense in the NanoMika context or could cause issues
+- `/help`, `/login`, `/logout`, `/doctor`, `/config`, `/remote-control`
 - Silently dropped — no error, no forwarding
 
-The command lists are hardcoded in the agent-runner. Admin verification happens host-side before the message ever reaches the container: `src/command-gate.ts` queries `user_roles` (owner / global admin / scoped-admin-of-this-agent-group) and either passes the message through, drops it, or routes it elsewhere. The container has no notion of admin identity — no env var, no DB query, no per-message check.
+**Admin-only commands (require admin sender):**
+- `/clear` — clear session context
+- `/compact` — force context compaction
+- `/context`, `/cost`, `/files`
+- If sent by a non-admin user, the command is rejected with a "Permission denied" message written straight to messages_out. Not forwarded to the agent.
+
+**Other slash commands (pass-through to agent):**
+- Passed to the container. The Claude provider handles slash commands natively, so they are sent raw, no XML wrapping
+
+Admin verification happens host-side before the message ever reaches the container: `src/command-gate.ts` queries `user_roles` (owner / global admin / scoped-admin-of-this-agent-group). The container has no notion of admin identity — no env var, no DB query, no per-message check. Inside the container, `/clear` is handled by the agent-runner itself (it resets the stored SDK session); other commands go to the SDK.
 
 ### Recurring Tasks
 
-The agent-runner processes recurring task messages like any other messages_in row. After the agent-runner marks a recurring message as `completed`, the **host** handles inserting the next occurrence (new messages_in row with `process_after` advanced to next cron time). The agent-runner doesn't manage recurrence — it just processes what it finds.
+The agent-runner processes recurring task messages like any other messages_in row. After a recurring message is `completed`, the **host** handles inserting the next occurrence (new messages_in row with `process_after` advanced to the next cron time). The agent-runner doesn't manage recurrence — it just processes what it finds.
 
 Pre-scripts: if a task message has a `script` field, run it first. If `wakeAgent = false`, mark completed without invoking Claude.
 
 ### Agent-to-Agent Messaging
 
-**Outbound:** Agent calls `send_to_agent` tool → agent-runner writes messages_out with `channel_type: 'agent'`, `platform_id` = target agent group ID. Host validates permissions and writes to target session's messages_in.
+**Outbound:** Agent sends to a destination of type `agent` (via `send_message` or a `<message to="name">` block) → agent-runner writes messages_out with `channel_type: 'agent'`, `platform_id` = target agent group ID. Host validates permissions and writes to the target session's messages_in.
 
-**Inbound:** Messages from other agents arrive as normal `chat` messages_in rows. The content includes `sender` and `senderId` (e.g., `"senderId": "agent:pr-admin"`). No special formatting — the agent sees it as a chat message.
+**Inbound:** Messages from other agents arrive as normal `chat` messages_in rows with `channel_type: 'agent'`. The formatter attributes them with the sending agent's destination name. No special formatting — the agent sees it as a chat message.
 
 ### Agent-Runner Properties
 
-- AgentProvider interface wraps SDK-specific query logic (trunk ships the `claude` provider; additional providers like OpenCode install via `/add-<provider>` skills)
-- Session resume via provider-specific mechanisms
+- AgentProvider interface wraps SDK-specific query logic (`container/agent-runner/src/providers/`: `claude`, plus `mock` for tests); providers self-register via `registerProvider()`
+- Session resume via provider-specific mechanisms (SDK session ID persisted in `session_state`)
 - System prompt loading from CLAUDE.md files
 - PreCompact hook for transcript archiving (Claude provider)
 - Script execution for task-kind messages
-
-## Open Questions
-
-- **Approval routing** — how does the host find the admin's DM conversation? What if no DM channel exists? Is the approval list configurable per agent group or global?
-- **MCP server lifecycle** — does the MCP server process persist across multiple queries in the same container, or restart each time?
-- **Container startup config** — what config (if any) is passed to the container at launch beyond env vars? The session DB is at a fixed mount path. System prompt comes from CLAUDE.md. Provider name comes from env. What else?
-- **Idle detection with pending questions** — when `ask_user_question` is waiting for a response, the container should not be considered idle. Also need to detect when the agent is still working (active tool calls, subagents) and avoid killing the container even if no messages_out have been written recently.
 
 ## Related Documents
 
 - **[api-details.md](api-details.md)** — Channel adapter interface (NanoMika + Chat SDK bridge), message content examples, host delivery logic
 - **[agent-runner-details.md](agent-runner-details.md)** — AgentProvider interface, MCP tools, message formatting, media handling, provider implementations
+- **[writing-a-channel.md](writing-a-channel.md)** — How to add a channel adapter

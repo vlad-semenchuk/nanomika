@@ -9,13 +9,20 @@
  */
 import type Database from 'better-sqlite3';
 
-import { getRunningSessions, getActiveSessions, createPendingQuestion } from './db/sessions.js';
+import {
+  createPendingQuestion,
+  getActiveSessions,
+  getAskQuestionRender,
+  getPendingQuestion,
+  getRunningSessions,
+} from './db/sessions.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { getDb, hasTable } from './db/connection.js';
 import { getMessagingGroupByPlatform } from './db/messaging-groups.js';
 import {
   getDueOutboundMessages,
   getDeliveredIds,
+  isMidWriteError,
   markDelivered,
   markDeliveryFailed,
   migrateDeliveredTable,
@@ -67,8 +74,8 @@ let sweepPolling = false;
 
 /**
  * Callbacks fired when the delivery adapter is first set (and again if it's
- * replaced). Lets modules that need the adapter at boot (e.g. approvals →
- * OneCLI handler) hook in without core calling into the module directly.
+ * replaced). Lets modules that need the adapter at boot (e.g. approvals)
+ * hook in without core calling into the module directly.
  *
  * Not a general-purpose registry — narrow lifecycle hook only.
  */
@@ -176,7 +183,14 @@ async function drainSession(session: Session): Promise<void> {
 
   try {
     // Read all due messages from outbound.db (read-only)
-    const allDue = getDueOutboundMessages(outDb);
+    let allDue: ReturnType<typeof getDueOutboundMessages>;
+    try {
+      allDue = getDueOutboundMessages(outDb);
+    } catch (err) {
+      if (!isMidWriteError(err)) throw err;
+      log.debug('outbound.db is being written, retrying next poll', { sessionId: session.id });
+      return;
+    }
     if (allDue.length === 0) return;
 
     // Filter out already-delivered messages using inbound.db's delivered table
@@ -314,6 +328,14 @@ async function deliverMessage(
   // Guarded: without the interactive module, `pending_questions` doesn't
   // exist and we skip persistence — the card still delivers to the user,
   // but the response path has nowhere to land and will log unclaimed.
+  // An agent's question must not reuse the id of a pending approval: its own
+  // options would replace the approval's and could turn any answer into "approve".
+  if (content.type === 'ask_question' && content.questionId && !getPendingQuestion(String(content.questionId))) {
+    if (getAskQuestionRender(String(content.questionId))) {
+      throw new Error(`ask_question id collides with a pending approval: ${String(content.questionId)}`);
+    }
+  }
+
   if (content.type === 'ask_question' && content.questionId && hasTable(getDb(), 'pending_questions')) {
     const title = content.title as string | undefined;
     const rawOptions = content.options as unknown;

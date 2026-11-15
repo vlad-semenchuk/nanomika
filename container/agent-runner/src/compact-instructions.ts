@@ -20,7 +20,6 @@ const instructions = [
   '1. For recent messages, keep the full XML structure including all attributes:',
   '   - <message from="..." sender="..." time="..."> for chat messages',
   '   - <task from="..." time="..."> for scheduled tasks',
-  '   - <webhook from="..." source="..." event="..."> for webhooks',
   '   The message content can be summarized if long, but the XML tags and attributes must remain.',
   '',
   '2. Preserve the chronological message/reply sequence of recent exchanges.',

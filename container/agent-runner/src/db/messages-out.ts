@@ -23,8 +23,6 @@ export interface MessageOutRow {
 export interface WriteMessageOut {
   id: string;
   in_reply_to?: string | null;
-  deliver_after?: string | null;
-  recurrence?: string | null;
   kind: string;
   platform_id?: string | null;
   channel_type?: string | null;
@@ -57,15 +55,13 @@ export function writeMessageOut(msg: WriteMessageOut): number {
   // in the JS object keys (better-sqlite3 auto-stripped it, bun:sqlite does not).
   outbound
     .prepare(
-      `INSERT INTO messages_out (id, seq, in_reply_to, timestamp, deliver_after, recurrence, kind, platform_id, channel_type, thread_id, content)
-     VALUES ($id, $seq, $in_reply_to, datetime('now'), $deliver_after, $recurrence, $kind, $platform_id, $channel_type, $thread_id, $content)`,
+      `INSERT INTO messages_out (id, seq, in_reply_to, timestamp, kind, platform_id, channel_type, thread_id, content)
+     VALUES ($id, $seq, $in_reply_to, datetime('now'), $kind, $platform_id, $channel_type, $thread_id, $content)`,
     )
     .run({
       $id: msg.id,
       $seq: nextSeq,
       $in_reply_to: msg.in_reply_to ?? null,
-      $deliver_after: msg.deliver_after ?? null,
-      $recurrence: msg.recurrence ?? null,
       $kind: msg.kind,
       $platform_id: msg.platform_id ?? null,
       $channel_type: msg.channel_type ?? null,

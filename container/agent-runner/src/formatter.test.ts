@@ -1,8 +1,5 @@
 /**
- * v1-parity tests for formatter behavior.
- *
- * Port of src/v1/formatting.test.ts (at commit 27c5220, parent of the v1
- * deletion commit 86becf8). Covers: context timezone header, reply_to +
+ * Tests for formatter behavior. Covers: context timezone header, reply_to +
  * quoted_message rendering, XML escaping, and stripInternalTags.
  *
  * Timestamp-format assertions use `formatLocalTime()` output format, which
@@ -13,7 +10,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 
 import { initTestSessionDb, closeSessionDb, getInboundDb } from './db/connection.js';
 import { getPendingMessages } from './db/messages-in.js';
-import { formatMessages, stripInternalTags } from './formatter.js';
+import { formatMessages, isClearCommand, stripInternalTags } from './formatter.js';
+import type { MessageInRow } from './db/messages-in.js';
 import { TIMEZONE } from './timezone.js';
 
 beforeEach(() => {
@@ -192,5 +190,15 @@ describe('stripInternalTags', () => {
     expect(stripInternalTags('<internal>thinking</internal>The answer is 42')).toBe(
       'The answer is 42',
     );
+  });
+});
+
+describe('isClearCommand', () => {
+  const row = (text: string) => ({ kind: 'chat', content: JSON.stringify({ text }) }) as unknown as MessageInRow;
+  it('matches /clear only as a whole command', () => {
+    expect(isClearCommand(row('/clear'))).toBe(true);
+    expect(isClearCommand(row('  /CLEAR now'))).toBe(true);
+    expect(isClearCommand(row('/clearx'))).toBe(false);
+    expect(isClearCommand(row('please /clear'))).toBe(false);
   });
 });

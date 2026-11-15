@@ -180,22 +180,14 @@ export function getPendingApproval(approvalId: string): PendingApproval | undefi
     | undefined;
 }
 
-export function updatePendingApprovalStatus(approvalId: string, status: PendingApproval['status']): void {
-  getDb().prepare('UPDATE pending_approvals SET status = ? WHERE approval_id = ?').run(status, approvalId);
-}
-
 export function deletePendingApproval(approvalId: string): void {
   getDb().prepare('DELETE FROM pending_approvals WHERE approval_id = ?').run(approvalId);
-}
-
-export function getPendingApprovalsByAction(action: string): PendingApproval[] {
-  return getDb().prepare('SELECT * FROM pending_approvals WHERE action = ?').all(action) as PendingApproval[];
 }
 
 /**
  * Resolve ask_question render metadata (title + normalized options) for any
  * card, regardless of whether it was persisted as a pending_question (generic
- * ask_user_question) or a pending_approval (self-mod / OneCLI credential).
+ * ask_user_question) or a pending_approval (approval-gated `ncl` command).
  */
 export function getAskQuestionRender(
   id: string,

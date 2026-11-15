@@ -22,6 +22,7 @@ import {
   readonlyMountArgs,
   stopContainer,
   ensureContainerRuntimeRunning,
+  ensureAgentImagePresent,
   cleanupOrphans,
 } from './container-runtime.js';
 import { CONTAINER_INSTALL_LABEL } from './config.js';
@@ -79,6 +80,37 @@ describe('ensureContainerRuntimeRunning', () => {
 
     expect(() => ensureContainerRuntimeRunning()).toThrow('Container runtime is required but failed to start');
     expect(log.error).toHaveBeenCalled();
+  });
+});
+
+// --- ensureAgentImagePresent ---
+
+describe('ensureAgentImagePresent', () => {
+  it('does nothing when the image exists', () => {
+    mockExecSync.mockReturnValueOnce('[]');
+
+    ensureAgentImagePresent('nanomika-agent-v2-abc12345:latest');
+
+    expect(mockExecSync).toHaveBeenCalledWith(
+      `${CONTAINER_RUNTIME_BIN} image inspect nanomika-agent-v2-abc12345:latest`,
+      expect.any(Object),
+    );
+  });
+
+  it('throws naming the build command when the image is missing', () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockExecSync.mockImplementationOnce(() => {
+      throw new Error('No such image');
+    });
+
+    expect(() => ensureAgentImagePresent('nanomika-agent-v2-abc12345:latest')).toThrow('pnpm run build:image');
+    expect(errSpy.mock.calls.flat().join('\n')).toContain('pnpm run build:image');
+    errSpy.mockRestore();
+  });
+
+  it('rejects image names with shell metacharacters', () => {
+    expect(() => ensureAgentImagePresent('img; rm -rf /')).toThrow('Invalid container image name');
+    expect(mockExecSync).not.toHaveBeenCalled();
   });
 });
 
