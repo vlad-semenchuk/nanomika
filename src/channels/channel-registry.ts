@@ -86,6 +86,11 @@ export async function initChannelAdapters(setupFn: (adapter: ChannelAdapter) => 
       log.error('Failed to start channel adapter', { channel: name, err });
     }
   }
+  // With no channel up the host can't receive or deliver anything; stop
+  // instead of running as a silent process.
+  if (registry.size > 0 && activeAdapters.size === 0) {
+    throw new Error('No channel adapter started (see the errors above)');
+  }
 }
 
 /** Tear down all active adapters. */

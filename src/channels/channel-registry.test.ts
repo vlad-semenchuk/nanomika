@@ -108,6 +108,27 @@ describe('channel registry', () => {
     const noCreds = active.find((a) => a.name === 'no-creds');
     expect(noCreds).toBeUndefined();
   });
+
+  it('fails startup when no adapter starts', async () => {
+    vi.resetModules();
+    const { registerChannelAdapter, initChannelAdapters } = await import('./channel-registry.js');
+    registerChannelAdapter('broken', {
+      factory: () => ({
+        ...createMockAdapter('broken'),
+        async setup() {
+          throw new Error('EACCES: cannot listen');
+        },
+      }),
+    });
+    const setup = () => ({
+      conversations: [],
+      onInbound: () => {},
+      onInboundEvent: () => {},
+      onMetadata: () => {},
+      onAction: () => {},
+    });
+    await expect(initChannelAdapters(setup)).rejects.toThrow('No channel adapter started');
+  });
 });
 
 describe('channel + router integration', () => {
