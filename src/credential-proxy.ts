@@ -33,6 +33,8 @@ export function startCredentialProxy(port: number, host = '127.0.0.1'): Promise<
   const upstreamUrl = new URL(secrets.ANTHROPIC_BASE_URL || 'https://api.anthropic.com');
   const isHttps = upstreamUrl.protocol === 'https:';
   const makeRequest = isHttps ? httpsRequest : httpRequest;
+  // Keep a path prefix such as https://gateway.example/anthropic.
+  const basePath = upstreamUrl.pathname.replace(/\/$/, '');
 
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
@@ -72,21 +74,32 @@ export function startCredentialProxy(port: number, host = '127.0.0.1'): Promise<
           {
             hostname: upstreamUrl.hostname,
             port: upstreamUrl.port || (isHttps ? 443 : 80),
-            path: req.url,
+            path: basePath + (req.url ?? '/'),
             method: req.method,
             headers,
           } as RequestOptions,
           (upRes) => {
             res.writeHead(upRes.statusCode!, upRes.headers);
             upRes.pipe(res);
+            // Upstream died mid-stream: end the container's response too, or it hangs.
+            upRes.on('close', () => {
+              if (!upRes.complete) res.destroy();
+            });
           },
         );
+
+        // The container went away: stop the upstream request instead of letting it run on.
+        res.on('close', () => {
+          if (!res.writableFinished) upstream.destroy();
+        });
 
         upstream.on('error', (err) => {
           log.error('Credential proxy upstream error', { err, url: req.url });
           if (!res.headersSent) {
             res.writeHead(502);
             res.end('Bad Gateway');
+          } else {
+            res.destroy();
           }
         });
 

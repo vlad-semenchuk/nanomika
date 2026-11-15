@@ -46,12 +46,14 @@ describe('credential-proxy', () => {
   let proxyPort: number;
   let upstreamPort: number;
   let lastUpstreamHeaders: http.IncomingHttpHeaders;
+  let lastUpstreamUrl: string | undefined;
 
   beforeEach(async () => {
     lastUpstreamHeaders = {};
 
     upstreamServer = http.createServer((req, res) => {
       lastUpstreamHeaders = { ...req.headers };
+      lastUpstreamUrl = req.url;
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true }));
     });
@@ -134,6 +136,17 @@ describe('credential-proxy', () => {
 
     expect(lastUpstreamHeaders['x-api-key']).toBe('temp-key-from-exchange');
     expect(lastUpstreamHeaders['authorization']).toBeUndefined();
+  });
+
+  it('keeps the path prefix of ANTHROPIC_BASE_URL', async () => {
+    Object.assign(mockEnv, {
+      ANTHROPIC_API_KEY: 'k',
+      ANTHROPIC_BASE_URL: `http://127.0.0.1:${upstreamPort}/gateway/anthropic/`,
+    });
+    proxyServer = await startCredentialProxy(0);
+    proxyPort = (proxyServer.address() as AddressInfo).port;
+    await makeRequest(proxyPort, { method: 'POST', path: '/v1/messages?beta=true' }, '{}');
+    expect(lastUpstreamUrl).toBe('/gateway/anthropic/v1/messages?beta=true');
   });
 
   it('strips hop-by-hop headers', async () => {
