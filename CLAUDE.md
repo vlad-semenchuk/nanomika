@@ -31,8 +31,8 @@ Privilege is user-level (owner/admin), not agent-group-level. See [docs/isolatio
 
 Each session has **two** SQLite files under `data/v2-sessions/<agent_group_id>/<session_id>/`:
 
-- `inbound.db` — host writes, container reads. `messages_in`, routing, destinations, pending_questions, processing_ack.
-- `outbound.db` — container writes, host reads. `messages_out`, session_state.
+- `inbound.db` — host writes, container reads. `messages_in`, `delivered`, `destinations`, `session_routing`.
+- `outbound.db` — container writes, host reads. `messages_out`, `processing_ack`, `session_state`, `container_state`.
 
 Exactly one writer per file, so there is no lock contention across the mount. Heartbeat is a file touch at `/workspace/.heartbeat`, not a DB update. Host uses even `seq` numbers, container uses odd.
 

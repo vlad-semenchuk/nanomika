@@ -140,7 +140,7 @@ alice sent your bot a DM on http. How would you like to handle it?
 Answer with: pnpm run chat /answer mg-1763200000000-ab12cd <1-3>
 ```
 
-Answer it:
+With more than one agent, the first option is `Choose existing agent` instead. Answer it:
 
 ```bash
 pnpm run chat /answer mg-1763200000000-ab12cd 1
@@ -217,8 +217,8 @@ Without `senderId` the host uses `sender` as the identity. With neither, the sen
 
 `isMention` matters in two places:
 
-- A message from a chat the host has never seen is ignored unless `isMention` is `true`. Only then does the owner get the request shown above.
-- Wirings with engage mode `mention` or `mention-sticky` answer only messages with `isMention: true`.
+- A message from a chat that has no wiring, whether the host has seen the chat before or not, is dropped unless `isMention` is `true`. Only then does the owner get the request shown above.
+- Wirings with engage mode `mention` answer only messages with `isMention: true`. `mention-sticky` also answers follow-ups in a group thread that already has a session.
 
 ### Outbound
 
@@ -257,7 +257,7 @@ Each chat has an `unknown_sender_policy`:
 | `request_approval` | is held; the owner is asked to approve them. This is the policy of chats the host creates itself. |
 | `strict` | is dropped |
 
-A sender is known when they are a member of the agent group or hold a role:
+A sender is known when they are a member of the agent group or hold a role. The user must exist first: the host creates it when that sender's first message arrives, even one that is dropped. Otherwise create it with `pnpm run ncl users create --id http:alice`.
 
 ```bash
 pnpm run ncl members add --user http:alice --group <ag-…>
@@ -270,7 +270,7 @@ Dropped messages are listed by `pnpm run ncl dropped-messages list`, with the re
 
 For a platform that has a Chat SDK adapter (the `chat` package and its `@chat-adapter/*` packages) you do not write the adapter by hand. `createChatSdkBridge` in `src/channels/chat-sdk-bridge.ts` wraps the SDK adapter into a `ChannelAdapter`, including cards, buttons, threads, reactions and file uploads.
 
-`src/channels/slack.ts` is the complete example in 41 lines: read the tokens, create the SDK adapter, pass it to the bridge, register. To add another platform the same way, add its adapter package with `pnpm add --save-exact <package>`, copy `slack.ts`, and add the import line.
+`src/channels/slack.ts` is the complete example: read the tokens, create the SDK adapter, pass it to the bridge, register. Pass `webhook: false` to the bridge when the adapter receives events over its own connection, as Slack does in Socket Mode; otherwise the bridge registers it on the shared webhook server (`0.0.0.0:3000`, `WEBHOOK_PORT`). To add another platform the same way, add its adapter package with `pnpm add --save-exact <package>`, copy `slack.ts`, and add the import line.
 
 ## Checklist
 

@@ -40,7 +40,7 @@ Both are committed. CI installs both with `--frozen-lockfile`, and the Dockerfil
 
 `container/Dockerfile` is a single-stage build on `node:22-slim`. Build it with `pnpm run build:image` (runs `container/build.sh`), which tags it `nanomika-agent-v2-<first 8 hex chars of sha1(checkout path)>:latest` — the same name `src/install-slug.ts` computes for the host and spawns (`CONTAINER_IMAGE_BASE` overrides the name in `build.sh`; the host spawns `CONTAINER_IMAGE` instead when that is set).
 
-- **Pinned ARGs** — `BUN_VERSION`, `CLAUDE_CODE_VERSION`, `PNPM_VERSION`, `AGENT_BROWSER_VERSION` (the last defaults to `latest`, so it is not actually pinned). The base image is pinned by digest. Bump deliberately in PRs.
+- **Pinned ARGs** — `BUN_VERSION`, `CLAUDE_CODE_VERSION`, `PNPM_VERSION`, `AGENT_BROWSER_VERSION`. The base image is pinned by digest. Bump deliberately in PRs.
 - **CJK fonts** — `ARG INSTALL_CJK_FONTS=false`. `container/build.sh` reads `INSTALL_CJK_FONTS` from `.env` and passes it through. Default build saves ~200MB; opt in when the user works with Chinese/Japanese/Korean content.
 - **BuildKit cache mounts** — `/var/cache/apt`, `/var/lib/apt`, `/root/.bun/install/cache`, `/root/.cache/pnpm`. Rebuilds where `package.json`/`bun.lock` haven't changed are fast. Requires BuildKit (default on Docker 23+).
 - **`tini` as init** — reaps Chromium zombies, forwards signals so in-flight `outbound.db` writes finalize on SIGTERM.
@@ -61,10 +61,11 @@ Both paths end with Bun running the same source file from `/app/src/index.ts`.
 1. `pnpm install --frozen-lockfile` (host)
 2. `bun install --frozen-lockfile` in `container/agent-runner/` (container)
 3. `pnpm run format:check`
-4. `pnpm exec tsc --noEmit` (host typecheck)
-5. `pnpm exec tsc -p container/agent-runner/tsconfig.json --noEmit` (container typecheck)
-6. `pnpm exec vitest run` (host tests)
-7. `bun test` in `container/agent-runner/` (container tests)
+4. `pnpm run lint`
+5. `pnpm exec tsc --noEmit` (host typecheck)
+6. `pnpm exec tsc -p container/agent-runner/tsconfig.json --noEmit` (container typecheck)
+7. `pnpm exec vitest run` (host tests)
+8. `bun test` in `container/agent-runner/` (container tests)
 
 Any failure fails the PR.
 

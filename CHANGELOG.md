@@ -13,6 +13,9 @@ Rebuild of the project as a small, standalone core that you clone, run and exten
 - **No vendored SQLite binary.** `better-sqlite3` now installs normally on every platform instead of from a macOS arm64 prebuilt.
 - **No agent self-modification tools.** The `install_packages` and `add_mcp_server` MCP tools are removed. Packages and MCP servers are still configurable with `ncl groups config`, and a request from an agent still needs approval.
 - **Fewer built-in integrations.** The Gmail and Calendar MCP servers are removed from the agent image. The only agent provider is `claude`.
+- **Fewer npm scripts.** `setup`, `setup:auto`, `auth` and the `postinstall` step are removed. `pnpm start` now compiles before it runs.
+- **No self-customize skill.** The `container/skills/self-customize` skill is removed with the self-modification tools.
+- **Trimmed repository.** The translated READMEs, `CONTRIBUTORS.md`, `RELEASING.md`, `CODEOWNERS`, the release and labelling workflows, and the tracked `groups/main` and `groups/global` instructions are removed.
 - **Logs go to the terminal.** The service files that redirected output to `logs/` are gone, so nothing writes log files.
 
 ### Added

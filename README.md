@@ -2,7 +2,7 @@
 
 A small personal Claude agent you can read end to end. One Node process on your machine routes messages to agents that each run in their own Docker container. You talk to it from your terminal, and you can add your own channel in one file.
 
-- **Small.** About 13,600 lines of host TypeScript, kept under a 14,000-line budget.
+- **Small.** About 13,200 lines of host TypeScript, kept under a 14,000-line budget.
 - **Isolated.** Each agent session runs in a Linux container and sees only what is mounted into it.
 - **Your key stays on the host.** Containers get a placeholder credential. A proxy on the host adds the real one to outgoing API requests.
 - **No installer.** Clone, install, build the image, start.
