@@ -1,217 +1,224 @@
-<h1 align="center">NanoMika</h1>
+# NanoMika
 
-<p align="center">
-  An AI assistant that runs agents securely in their own containers. Lightweight, built to be easily understood and completely customized for your needs.
-</p>
+A small personal Claude agent you can read end to end. One Node process on your machine routes messages to agents that each run in their own Docker container. You talk to it from your terminal, and you can add your own channel in one file.
 
-<p align="center">
-  <a href="https://nanomika.dev">nanomika.dev</a>&nbsp; • &nbsp;
-  <a href="https://docs.nanomika.dev">docs</a>&nbsp; • &nbsp;
-  <a href="README_zh.md">中文</a>&nbsp; • &nbsp;
-  <a href="README_ja.md">日本語</a>&nbsp; • &nbsp;
-  <a href="https://discord.gg/VDdww8qS42"><img src="https://img.shields.io/discord/1470188214710046894?label=Discord&logo=discord&v=2" alt="Discord" valign="middle"></a>&nbsp; • &nbsp;
-  <a href="repo-tokens"><img src="repo-tokens/badge.svg" alt="repo tokens" valign="middle"></a>
-</p>
-
----
-
-## Why I Built NanoMika
-
-Heavyweight personal-assistant frameworks are impressive, but I wouldn't have been able to sleep if I had given complex software I didn't understand full access to my life. They can run to hundreds of thousands of lines of code, dozens of config files, and 70+ dependencies, with security at the application level (allowlists, pairing codes) rather than true OS-level isolation — everything in one Node process with shared memory.
-
-NanoMika provides that same core functionality, but in a codebase small enough to understand: one process and a handful of files. Claude agents run in their own Linux containers with filesystem isolation, not merely behind permission checks.
-
-## Quick Start
-
-```bash
-git clone https://github.com/nanocoai/nanomika.git nanomika-v2
-cd nanomika-v2
-bash nanomika.sh
-```
-
-`nanomika.sh` walks you from a fresh machine to a named agent you can message. It installs Node, pnpm, and Docker if missing, registers your Anthropic credential with OneCLI, builds the agent container, and pairs your first channel (Telegram, Discord, WhatsApp, or a local CLI). If a step fails, Claude Code is invoked automatically to diagnose and resume from where it broke.
-
-<details>
-<summary><strong>Migrating from NanoMika v1?</strong></summary>
-
-Run from a fresh v2 checkout next to your v1 install:
-
-```bash
-git clone https://github.com/nanocoai/nanomika.git nanomika-v2
-cd nanomika-v2
-bash migrate-v2.sh
-```
-
-`migrate-v2.sh` finds your v1 install (sibling directory, or `NANOMIKA_V1_PATH=/path/to/nanomika`), migrates state into the v2 checkout, then `exec`s into Claude Code to finish the parts that need judgment (owner seeding, CLAUDE.local.md cleanup, fork-customisation replay).
-
-Run the script directly, not from inside a Claude session — the deterministic side needs interactive prompts and real shell I/O for Node/pnpm bootstrap, Docker, OneCLI, and the container build.
-
-**What it does:** merges `.env`, seeds the v2 DB from `registered_groups`, copies group folders + session data + scheduled tasks, installs the channel adapters you select, copies channel auth state (including Baileys keystore + LID mappings for WhatsApp), builds the agent container.
-
-**What it doesn't:** flip the system service. Pick *"switch to v2"* at the prompt, or do it manually after testing — your v1 install is left untouched.
-
-See [docs/v1-to-v2-changes.md](docs/v1-to-v2-changes.md) for what's different and [docs/migration-dev.md](docs/migration-dev.md) for development notes.
-
-</details>
-
-## Philosophy
-
-**Small enough to understand.** One process, a few source files and no microservices. If you want to understand the full NanoMika codebase, just ask Claude Code to walk you through it.
-
-**Secure by isolation.** Agents run in Linux containers and they can only see what's explicitly mounted. Bash access is safe because commands run inside the container, not on your host.
-
-**Built for the individual user.** NanoMika isn't a monolithic framework; it's software that fits each user's exact needs. Instead of becoming bloatware, NanoMika is designed to be bespoke. You make your own fork and have Claude Code modify it to match your needs.
-
-**Customization = code changes.** No configuration sprawl. Want different behavior? Modify the code. The codebase is small enough that it's safe to make changes.
-
-**AI-native, hybrid by design.** The install and onboarding flow is an optimized scripted path, fast and deterministic. When a step needs judgment, whether a failed install, a guided decision, or a customization, control hands off to Claude Code seamlessly. Beyond setup there's no monitoring dashboard or debugging UI either: describe the problem in chat and Claude Code handles it.
-
-**Skills over features.** Trunk ships the registry and infrastructure, not specific channel adapters or alternative agent providers. Channels (Discord, Slack, Telegram, WhatsApp, …) live on a long-lived `channels` branch; alternative providers (OpenCode, Ollama) live on `providers`. You run `/add-telegram`, `/add-opencode`, etc. and the skill copies exactly the module(s) you need into your fork. No feature you didn't ask for.
-
-**Best harness, best model.** NanoMika natively uses Claude Code via Anthropic's official Claude Agent SDK, so you get the latest Claude models and Claude Code's full toolset, including the ability to modify and expand your own NanoMika fork. Other providers are drop-in options: `/add-codex` for OpenAI's Codex (ChatGPT subscription or API key), `/add-opencode` for OpenRouter, Google, DeepSeek and more via OpenCode, and `/add-ollama-provider` for local open-weight models. Provider is configurable per agent group.
-
-## What It Supports
-
-- **Multi-channel messaging** — WhatsApp, Telegram, Discord, Slack, Microsoft Teams, iMessage, Matrix, Google Chat, Webex, Linear, GitHub, WeChat, and email via Resend. Installed on demand with `/add-<channel>` skills. Run one or many at the same time.
-- **Flexible isolation** — connect each channel to its own agent for full privacy, share one agent across many channels for unified memory with separate conversations, or fold multiple channels into a single shared session so one conversation spans many surfaces. Pick per channel via `/manage-channels`. See [docs/isolation-model.md](docs/isolation-model.md).
-- **Per-agent workspace** — each agent group has its own `CLAUDE.md`, its own memory, its own container, and only the mounts you allow. Nothing crosses the boundary unless you wire it to.
-- **Scheduled tasks** — recurring jobs that run Claude and can message you back
-- **Web access** — search and fetch content from the web
-- **Container isolation** — agents are sandboxed in Docker (macOS/Linux/WSL2), with optional [Docker Sandboxes](docs/docker-sandboxes.md) micro-VM isolation or Apple Container as a macOS-native opt-in
-- **Credential security** — agents never hold raw API keys. Outbound requests route through [OneCLI's Agent Vault](https://github.com/onecli/onecli), which injects credentials at request time and enforces per-agent policies and rate limits.
-
-## Usage
-
-Talk to your assistant with the trigger word (default: `@Andy`):
-
-```
-@Andy send an overview of the sales pipeline every weekday morning at 9am (has access to my Obsidian vault folder)
-@Andy review the git history for the past week each Friday and update the README if there's drift
-@Andy every Monday at 8am, compile news on AI developments from Hacker News and TechCrunch and message me a briefing
-```
-
-From a channel you own or administer, you can manage groups and tasks:
-```
-@Andy list all scheduled tasks across groups
-@Andy pause the Monday briefing task
-@Andy join the Family Chat group
-```
-
-## Customizing
-
-NanoMika doesn't use configuration files. To make changes, just tell Claude Code what you want:
-
-- "Change the trigger word to @Bob"
-- "Remember in the future to make responses shorter and more direct"
-- "Add a custom greeting when I say good morning"
-- "Store conversation summaries weekly"
-
-Or run `/customize` for guided changes.
-
-The codebase is small enough that Claude can safely modify it.
-
-## Contributing
-
-**Don't add features. Add skills.**
-
-If you want to add a new channel or agent provider, don't add it to trunk. New channel adapters land on the `channels` branch; new agent providers land on `providers`. Users install them in their own fork with `/add-<name>` skills, which copy the relevant module(s) into the standard paths, wire the registration, and pin dependencies.
-
-This keeps trunk as pure registry and infra, and every fork stays lean — users get the channels and providers they asked for and nothing else.
-
-### RFS (Request for Skills)
-
-Skills we'd like to see:
-
-**Communication Channels**
-- `/add-signal` — Add Signal as a channel
+- **Small.** About 13,600 lines of host TypeScript, kept under a 14,000-line budget.
+- **Isolated.** Each agent session runs in a Linux container and sees only what is mounted into it.
+- **Your key stays on the host.** Containers get a placeholder credential. A proxy on the host adds the real one to outgoing API requests.
+- **No installer.** Clone, install, build the image, start.
 
 ## Requirements
 
-- macOS or Linux (Windows via WSL2)
-- Node.js 20+ and pnpm 10+ (the installer will install both if missing)
-- [Docker Desktop](https://docker.com/products/docker-desktop) (macOS/Windows) or Docker Engine (Linux)
-- [Claude Code](https://claude.ai/download) for `/customize`, `/debug`, error recovery during setup, and all `/add-<channel>` skills
+- macOS or Linux
+- Node.js 22 and pnpm 10
+- Docker (Docker Desktop on macOS, Docker Engine on Linux), running
+- An Anthropic API key, or a Claude subscription token
 
-## Architecture
+This release was tested on macOS. The Linux code paths exist (proxy bind address, `host.docker.internal` mapping) but have not been tested. On Linux your user must be able to run `docker` without `sudo`.
 
-```
-messaging apps → host process (router) → inbound.db → container (Bun, Claude Agent SDK) → outbound.db → host process (delivery) → messaging apps
-```
-
-A single Node host orchestrates per-session agent containers. When a message arrives, the host routes it via the entity model (user → messaging group → agent group → session), writes it to the session's `inbound.db`, and wakes the container. The agent-runner inside the container polls `inbound.db`, runs Claude, and writes responses to `outbound.db`. The host polls `outbound.db` and delivers back through the channel adapter.
-
-Two SQLite files per session, each with exactly one writer — no cross-mount contention, no IPC, no stdin piping. Channels and alternative providers self-register at startup; trunk ships the registry and the Chat SDK bridge, while the adapters themselves are skill-installed per fork.
-
-For the full architecture writeup see [docs/architecture.md](docs/architecture.md); for the three-level isolation model see [docs/isolation-model.md](docs/isolation-model.md).
-
-Key files:
-- `src/index.ts` — entry point: DB init, channel adapters, delivery polls, sweep
-- `src/router.ts` — inbound routing: messaging group → agent group → session → `inbound.db`
-- `src/delivery.ts` — polls `outbound.db`, delivers via adapter, handles system actions
-- `src/host-sweep.ts` — 60s sweep: stale detection, due-message wake, recurrence
-- `src/session-manager.ts` — resolves sessions, opens `inbound.db` / `outbound.db`
-- `src/container-runner.ts` — spawns per-agent-group containers, OneCLI credential injection
-- `src/db/` — central DB (users, roles, agent groups, messaging groups, wiring, migrations)
-- `src/channels/` — channel adapter infra (adapters installed via `/add-<channel>` skills)
-- `src/providers/` — host-side provider config (`claude` baked in; others via skills)
-- `container/agent-runner/` — Bun agent-runner: poll loop, MCP tools, provider abstraction
-- `groups/<folder>/` — per-agent-group filesystem (`CLAUDE.md`, skills, container config)
-
-## FAQ
-
-**Why Docker?**
-
-Docker provides cross-platform support (macOS, Linux and Windows via WSL2) and a mature ecosystem. On macOS, you can optionally switch to Apple Container via `/convert-to-apple-container` for a lighter-weight native runtime. For additional isolation, [Docker Sandboxes](docs/docker-sandboxes.md) run each container inside a micro VM.
-
-**Can I run this on Linux or Windows?**
-
-Yes. Docker is the default runtime and works on macOS, Linux, and Windows (via WSL2). Just run `bash nanomika.sh`.
-
-**Is this secure?**
-
-Agents run in containers, not behind application-level permission checks. They can only access explicitly mounted directories. Credentials never enter the container — outbound API requests route through [OneCLI's Agent Vault](https://github.com/onecli/onecli), which injects authentication at the proxy level and supports rate limits and access policies. You should still review what you're running, but the codebase is small enough that you actually can. See the [security documentation](https://docs.nanomika.dev/concepts/security) for the full security model.
-
-**Why no configuration files?**
-
-We don't want configuration sprawl. Every user should customize NanoMika so that the code does exactly what they want, rather than configuring a generic system. If you prefer having config files, you can tell Claude to add them.
-
-**Can I use third-party or open-source models?**
-
-Yes. The supported path is `/add-opencode` (OpenRouter, OpenAI, Google, DeepSeek, and more via OpenCode config) or `/add-ollama-provider` (local open-weight models via Ollama). Both are configurable per agent group, so different agents can run on different backends in the same install.
-
-For one-off experiments, any Claude API-compatible endpoint also works via `.env`:
+## Quick start
 
 ```bash
-ANTHROPIC_BASE_URL=https://your-api-endpoint.com
-ANTHROPIC_AUTH_TOKEN=your-token-here
+git clone https://github.com/vlad-semenchuk/nanomika.git
+cd nanomika
+pnpm install
+cp .env.example .env        # then open .env and set ANTHROPIC_API_KEY
+pnpm run build:image        # builds the agent image; takes a few minutes the first time
+pnpm start
 ```
 
-**How do I debug issues?**
+Leave `pnpm start` running. In a second terminal:
 
-Ask Claude Code. "Why isn't the scheduler running?" "What's in the recent logs?" "Why did this message not get a response?" That's the AI-native approach that underlies NanoMika.
+```bash
+pnpm run chat hello
+```
 
-**Why isn't the setup working for me?**
+The first message takes a few seconds longer because it starts the container.
 
-If a step fails, `nanomika.sh` hands off to Claude Code to diagnose and resume. If that doesn't resolve it, run `claude`, then `/debug`. If Claude identifies an issue likely to affect other users, open a PR against the relevant setup step or skill.
+Keep the checkout path short, for example `~/nanomika`. The host listens on Unix sockets under `data/`, and macOS limits a socket path to 103 bytes. The host stops with a clear message if the path is too long.
 
-**What changes will be accepted into the codebase?**
+### What the first start does
 
-Only security fixes, bug fixes, and clear improvements will be accepted to the base configuration. That's all.
+When the database has no agents, the host creates:
 
-Everything else (new capabilities, OS compatibility, hardware support, enhancements) should be contributed as skills on the `channels` or `providers` branch.
+- an agent named `Andy` (set `ASSISTANT_NAME` in `.env` before the first start to change it), with its folder at `groups/main/`
+- the user `cli:local`, your terminal, with the owner role
+- the wiring between your terminal and that agent
 
-This keeps the base system minimal and lets every user customize their installation without inheriting features they don't want.
+Later starts change nothing. If something is missing, the host stops before doing any work and names the fix: no credential in `.env`, Docker not running, or the agent image not built.
 
-## Community
+## Talking to your agent
 
-Questions? Ideas? [Join the Discord](https://discord.gg/VDdww8qS42).
+```bash
+pnpm run chat <message>     # send a message, print the reply
+pnpm run chat               # print what arrived while no chat was open
+```
 
-## Changelog
+`pnpm run chat` exits two seconds after the reply. Anything the agent sends later (a scheduled task's output, a slow follow-up) is kept by the host and printed as `[earlier]` the next time you run `pnpm run chat`. This backlog is in memory, so it does not survive a host restart.
 
-See [CHANGELOG.md](CHANGELOG.md) for breaking changes, or the [full release history](https://docs.nanomika.dev/changelog) on the documentation site.
+To change how the agent behaves, edit `groups/main/CLAUDE.local.md`. It is loaded into every session of that agent.
+
+### Approvals and questions
+
+Some actions need the owner's approval, for example when an agent changes its own configuration with `ncl`. The request appears in your terminal with numbered options:
+
+```
+❓ CLI: groups config update
+Agent "Andy" wants to run:
+`ncl groups config update --max-messages-per-prompt 7`
+  1. Approve
+  2. Reject
+Answer with: pnpm run chat /answer appr-1763200000000-ab12cd <1-2>
+```
+
+```bash
+pnpm run chat /answer appr-1763200000000-ab12cd 1
+```
+
+Answer with the number or the option name. The same works for questions the agent asks you with a list of choices.
+
+## Admin CLI: `ncl`
+
+`ncl` reads and changes the central database through the running host: agents, chats, wirings, users and roles.
+
+```bash
+pnpm run ncl help
+pnpm run ncl groups list
+pnpm run ncl wirings list
+pnpm run ncl groups config get --id <agent-group-id>
+```
+
+To call it as plain `ncl` from any directory, link the launcher into your `PATH`:
+
+```bash
+ln -s "$(pwd)/bin/ncl" /usr/local/bin/ncl
+```
+
+Every resource explains itself with `ncl <resource> help`. The resources are `groups`, `messaging-groups`, `wirings`, `users`, `roles`, `members`, `destinations`, `sessions`, `user-dms`, `dropped-messages` and `approvals`.
+
+## How it works
+
+```
+ terminal / your channel
+          │  message                                  ▲  reply
+          ▼                                           │
+ ┌───────────────────── host (Node) ─────────────────────────┐
+ │  channel adapter → router ──────────┐   delivery → adapter │
+ │  central DB: data/v2.db             │       ▲              │
+ │  credential proxy (adds the key)    │       │              │
+ └─────────────────────────────────────┼───────┼──────────────┘
+                                       ▼       │
+                  per session:    inbound.db  outbound.db
+                                       │       ▲
+                                       ▼       │
+ ┌───────────── agent container (Bun, Claude Agent SDK) ──────┐
+ │  poll inbound.db → run Claude → write outbound.db          │
+ │  Anthropic API calls go out through the host proxy         │
+ └────────────────────────────────────────────────────────────┘
+```
+
+- A channel adapter receives a message and hands it to the router.
+- The router finds the chat (a *messaging group*), the agent wired to it (an *agent group*) and the *session*, writes the message to that session's `inbound.db`, and starts the container if it is not running.
+- The agent-runner in the container polls `inbound.db`, runs Claude, and writes replies to `outbound.db`.
+- The host polls `outbound.db` and delivers replies through the same adapter.
+
+Each of the two session files has exactly one writer, and they are the only link between host and container.
+
+| Path | What it is |
+|---|---|
+| `src/index.ts` | Entry point: startup checks, database, first-start bootstrap, proxy, channels, delivery, sweep |
+| `src/router.ts` | Inbound routing |
+| `src/delivery.ts` | Outbound delivery and system actions |
+| `src/container-runner.ts` | Starts and stops agent containers |
+| `src/credential-proxy.ts` | Adds the real credential to API requests from containers |
+| `src/channels/` | Channel adapters and their registry |
+| `src/cli/` | The `ncl` admin CLI |
+| `src/db/` | Central database and migrations |
+| `container/agent-runner/` | The code that runs inside the container |
+| `groups/<folder>/` | Per-agent files (instructions, skills). Not committed. |
+| `data/` | Databases, sockets and session files. Not committed. |
+
+## Adding a channel
+
+A channel is one file under `src/channels/` that implements the `ChannelAdapter` interface and registers itself, plus one import line in `src/channels/index.ts`. [docs/writing-a-channel.md](docs/writing-a-channel.md) walks through it with a complete example.
+
+## Enabling Slack
+
+A Slack adapter ships in the tree but is switched off.
+
+1. Create a Slack app with Socket Mode enabled, a bot token (`xoxb-…`) and an app-level token (`xapp-…`).
+2. Set `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` in `.env`.
+3. Uncomment the `./slack.js` import in `src/channels/index.ts`.
+4. Restart the host.
+5. Mention the bot in a channel or send it a direct message. The first message from a new chat raises a request in your terminal asking which agent to connect it to. Answer it with `/answer` as above.
+
+## Configuration
+
+Secrets and a few settings live in `.env`. See [.env.example](.env.example) for the full list.
+
+| Variable | Purpose |
+|---|---|
+| `ANTHROPIC_API_KEY` | API key. One credential is required. |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Alternative: a Claude subscription token |
+| `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL` | Alternative: a bearer token and endpoint for an Anthropic-compatible gateway |
+| `ASSISTANT_NAME` | Name of the first agent (default `Andy`) |
+| `TZ` | Timezone for scheduled tasks (default: the system timezone) |
+| `INSTALL_CJK_FONTS` | `true` adds Chinese, Japanese and Korean fonts to the agent image. Rebuild the image after changing it. |
+
+A few settings are read from the process environment instead, for example `LOG_LEVEL=debug pnpm start`.
+
+Per-agent settings (model, effort, extra packages, MCP servers) are in the database: see `pnpm run ncl groups help`.
+
+### Giving an agent access to host folders
+
+By default a container sees only its own agent folder and session files. Extra host folders must be inside a root listed in `~/.config/nanomika/mount-allowlist.json`, which lives outside the project so that no agent can edit it. Start from [config-examples/mount-allowlist.json](config-examples/mount-allowlist.json). Without that file, every extra mount is refused.
+
+## Security
+
+- Agents run in containers and can touch only what is mounted. The project's `.env` is never mounted.
+- The Anthropic credential is read from `.env` by the host proxy. A container's environment holds only a placeholder, which you can confirm with `docker inspect`.
+- The local sockets (`data/cli.sock`, `data/ncl.sock`) are readable by your user only. Anyone who can connect to them acts as the owner.
+- Agents have unrestricted outbound network access.
+
+See [docs/SECURITY.md](docs/SECURITY.md) for the full model.
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `FATAL: no Anthropic credential found in .env` | Set `ANTHROPIC_API_KEY` (or one of the alternatives) in `.env` |
+| `FATAL: Container runtime failed to start` | Start Docker, check `docker info` |
+| `FATAL: agent image … not found` | `pnpm run build:image` |
+| `FATAL: the socket path is too long` | Move the checkout to a shorter path |
+| `chat: cannot reach NanoMika host` | Start the host with `pnpm start` in another terminal |
+| The host waits before starting | It was restarted several times in quick succession and is backing off. A clean stop with Ctrl-C resets this. |
+| No reply | Read the host's terminal output. `pnpm run ncl sessions list` and `pnpm run ncl dropped-messages list` show whether the message was routed. |
+
+The host logs to its terminal. After changing files under `container/`, run `pnpm run build:image` again.
+
+## Development
+
+```bash
+pnpm dev                    # run the host from source
+pnpm run typecheck
+pnpm run lint
+pnpm test                   # host tests (vitest)
+(cd container/agent-runner && bun install --frozen-lockfile && bun test)   # container tests (needs Bun)
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Documentation
+
+| Doc | Covers |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | The full architecture |
+| [docs/writing-a-channel.md](docs/writing-a-channel.md) | Adding your own channel |
+| [docs/isolation-model.md](docs/isolation-model.md) | Sharing or separating agents and sessions across chats |
+| [docs/SECURITY.md](docs/SECURITY.md) | Security model |
+| [docs/db.md](docs/db.md) | The databases |
+| [docs/README.md](docs/README.md) | Index of all docs |
 
 ## License
 
-MIT
-
-<img referrerpolicy="no-referrer-when-downgrade" src="https://static.scarf.sh/a.png?x-pxid=47894bd5-353b-42fe-bb97-74144e6df0bf" />
+[MIT](LICENSE)
