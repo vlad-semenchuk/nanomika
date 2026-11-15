@@ -63,9 +63,9 @@ To change how the agent behaves, edit `groups/main/CLAUDE.local.md`. It is loade
 Some actions need the owner's approval, for example when an agent changes its own configuration with `ncl`. The request appears in your terminal with numbered options:
 
 ```
-❓ CLI: groups config update
+❓ CLI: groups-config-update
 Agent "Andy" wants to run:
-`ncl groups config update --max-messages-per-prompt 7`
+`ncl groups-config-update --max-messages-per-prompt 7 --agent-group-id ag-… --group ag-… --id ag-…`
   1. Approve
   2. Reject
 Answer with: pnpm run chat /answer appr-1763200000000-ab12cd <1-2>
