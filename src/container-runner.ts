@@ -326,9 +326,14 @@ function buildMounts(
  */
 function syncSkillSymlinks(claudeDir: string, containerConfig: import('./container-config.js').ContainerConfig): void {
   const skillsDir = path.join(claudeDir, 'skills');
-  if (!fs.existsSync(skillsDir)) {
-    fs.mkdirSync(skillsDir, { recursive: true });
+  // claudeDir is writable by the container: never work inside a symlinked skills dir.
+  try {
+    const st = fs.lstatSync(skillsDir);
+    if (st.isSymbolicLink() || !st.isDirectory()) fs.rmSync(skillsDir, { force: true });
+  } catch {
+    // missing
   }
+  fs.mkdirSync(skillsDir, { recursive: true });
 
   // Determine desired skill set
   const projectRoot = process.cwd();

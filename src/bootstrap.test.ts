@@ -94,4 +94,12 @@ describe('bootstrapFirstAgent', () => {
     expect(count('messaging_groups')).toBe(0);
     expect(fs.existsSync(path.join(TEST_DIR, 'groups', 'main'))).toBe(false);
   });
+
+  it('does not create a file through a dangling CLAUDE.local.md symlink', () => {
+    const outside = path.join(TEST_DIR, 'outside.txt');
+    fs.mkdirSync(path.join(TEST_DIR, 'groups', 'main'), { recursive: true });
+    fs.symlinkSync(outside, path.join(TEST_DIR, 'groups', 'main', 'CLAUDE.local.md'));
+    bootstrapFirstAgent('Andy');
+    expect(fs.existsSync(outside)).toBe(false);
+  });
 });

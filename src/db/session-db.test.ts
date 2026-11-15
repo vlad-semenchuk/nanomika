@@ -10,7 +10,7 @@ import fs from 'fs';
 import path from 'path';
 import { describe, it, expect, afterEach } from 'vitest';
 
-import { getInboundSourceSessionId, migrateMessagesInTable } from './session-db.js';
+import { getInboundSourceSessionId, migrateMessagesInTable, openInboundDb } from './session-db.js';
 
 const TEST_DIR = '/tmp/nanomika-session-db-test';
 const DB_PATH = path.join(TEST_DIR, 'inbound.db');
@@ -90,5 +90,24 @@ describe('migrateMessagesInTable', () => {
     expect(getInboundSourceSessionId(db, 'legacy-2')).toBeNull();
     expect(getInboundSourceSessionId(db, 'does-not-exist')).toBeNull();
     db.close();
+  });
+});
+
+describe('session DB symlinks', () => {
+  it('refuses a symlinked DB file and removes a symlinked journal', () => {
+    fs.mkdirSync(TEST_DIR, { recursive: true });
+    const target = path.join(TEST_DIR, 'central.db');
+    fs.writeFileSync(target, '');
+    fs.symlinkSync(target, DB_PATH);
+    expect(() => openInboundDb(DB_PATH)).toThrow(/symlinked/);
+
+    fs.unlinkSync(DB_PATH);
+    const victim = path.join(TEST_DIR, 'victim.txt');
+    fs.writeFileSync(victim, 'keep');
+    fs.symlinkSync(victim, DB_PATH + '-journal');
+    const db = openInboundDb(DB_PATH);
+    db.exec('CREATE TABLE t (x); INSERT INTO t VALUES (1);');
+    db.close();
+    expect(fs.readFileSync(victim, 'utf-8')).toBe('keep');
   });
 });

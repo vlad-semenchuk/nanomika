@@ -12,6 +12,7 @@
  * Runs on every spawn from `container-runner.buildMounts()`. Deterministic —
  * same inputs produce the same CLAUDE.md, and stale fragments are pruned.
  */
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
@@ -148,8 +149,13 @@ function syncSymlink(linkPath: string, target: string): void {
   fs.symlinkSync(target, linkPath);
 }
 
+/**
+ * Write via a temp file and rename. The group folder is writable by the
+ * container: the random name and `wx` keep the host from writing through a
+ * pre-placed symlink, and rename replaces a symlink at `filePath` itself.
+ */
 function writeAtomic(filePath: string, content: string): void {
-  const tmp = `${filePath}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, content);
+  const tmp = `${filePath}.tmp-${crypto.randomBytes(8).toString('hex')}`;
+  fs.writeFileSync(tmp, content, { flag: 'wx' });
   fs.renameSync(tmp, filePath);
 }

@@ -6,12 +6,36 @@
  * (open-write-close per op). See session-manager.ts header for invariants.
  */
 import Database from 'better-sqlite3';
+import fs from 'fs';
 
 import { INBOUND_SCHEMA, OUTBOUND_SCHEMA } from './schema.js';
 
+/**
+ * Open a session DB file. The session folder is writable by the container,
+ * so refuse a symlinked DB file and remove symlinked side files (journal,
+ * WAL), which SQLite would otherwise follow and write through.
+ */
+function openSessionDb(dbPath: string, options?: Database.Options): Database.Database {
+  for (const suffix of ['-journal', '-wal', '-shm']) {
+    try {
+      if (fs.lstatSync(dbPath + suffix).isSymbolicLink()) fs.unlinkSync(dbPath + suffix);
+    } catch {
+      // missing
+    }
+  }
+  let isLink = false;
+  try {
+    isLink = fs.lstatSync(dbPath).isSymbolicLink();
+  } catch {
+    // missing: SQLite creates it
+  }
+  if (isLink) throw new Error(`Refusing to open symlinked session DB: ${dbPath}`);
+  return new Database(dbPath, options);
+}
+
 /** Apply the inbound or outbound schema to a DB file. Idempotent. */
 export function ensureSchema(dbPath: string, schema: 'inbound' | 'outbound'): void {
-  const db = new Database(dbPath);
+  const db = openSessionDb(dbPath);
   db.pragma('journal_mode = DELETE');
   db.exec(schema === 'inbound' ? INBOUND_SCHEMA : OUTBOUND_SCHEMA);
   db.close();
@@ -19,7 +43,7 @@ export function ensureSchema(dbPath: string, schema: 'inbound' | 'outbound'): vo
 
 /** Open the inbound DB for a session (host reads/writes). */
 export function openInboundDb(dbPath: string): Database.Database {
-  const db = new Database(dbPath);
+  const db = openSessionDb(dbPath);
   db.pragma('journal_mode = DELETE');
   db.pragma('busy_timeout = 5000');
   return db;
@@ -27,14 +51,14 @@ export function openInboundDb(dbPath: string): Database.Database {
 
 /** Open the outbound DB for a session (host reads only). */
 export function openOutboundDb(dbPath: string): Database.Database {
-  const db = new Database(dbPath, { readonly: true });
+  const db = openSessionDb(dbPath, { readonly: true });
   db.pragma('busy_timeout = 5000');
   return db;
 }
 
 /** Open the outbound DB for a session with write access. Only safe to call when no container is running. */
 export function openOutboundDbRw(dbPath: string): Database.Database {
-  const db = new Database(dbPath);
+  const db = openSessionDb(dbPath);
   db.pragma('journal_mode = DELETE');
   db.pragma('busy_timeout = 5000');
   return db;
