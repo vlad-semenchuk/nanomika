@@ -20,6 +20,10 @@
  *     { "text": "agent reply" }
  *     { "text": "...", "backlog": true }                  # sent while no terminal was connected
  *
+ * The terminal is text-only. Cards print their fallback text, edits and
+ * reactions print as new lines, and attached files are saved under
+ * `data/cli-files/` with their path printed.
+ *
  * Questions and approval requests (`ask_question` cards) are printed as text
  * with numbered options. Answer one with `/answer <questionId> <number|option>`;
  * the adapter turns that into an action from `cli:local` instead of routing
@@ -135,7 +139,7 @@ function createAdapter(): ChannelAdapter {
       if (platformId !== PLATFORM_ID) return undefined;
       const question = asQuestion(message);
       if (question) pendingQuestions.set(question.questionId, question.options);
-      const text = question ? formatQuestionText(question) : extractText(message);
+      const text = question ? formatQuestionText(question) : formatOutbound(message, saveFile);
       if (text === null) return undefined;
       if (!client) {
         // No live terminal: keep it for the next client that connects.
@@ -368,13 +372,35 @@ export function resolveOption(options: NormalizedOption[], choice: string): stri
   return o ? o.value : null;
 }
 
-function extractText(message: OutboundMessage): string | null {
-  const content = message.content as Record<string, unknown> | string | undefined;
-  if (typeof content === 'string') return content;
-  if (content && typeof content === 'object' && typeof content.text === 'string') {
-    return content.text;
-  }
-  return null;
+/** Save an attachment under data/cli-files/ and return its path relative to the project. */
+function saveFile(filename: string, data: Buffer): string {
+  const dir = path.join(DATA_DIR, 'cli-files');
+  fs.mkdirSync(dir, { recursive: true });
+  const name = `${Date.now()}-${path.basename(filename) || 'file'}`;
+  fs.writeFileSync(path.join(dir, name), data);
+  return path.join(path.relative(process.cwd(), dir), name);
+}
+
+/** Render any outbound message as terminal text, or null when there is nothing to show. */
+export function formatOutbound(
+  message: OutboundMessage,
+  save: (filename: string, data: Buffer) => string,
+): string | null {
+  const raw = message.content as Record<string, unknown> | string | undefined;
+  const c: Record<string, unknown> = typeof raw === 'string' ? { text: raw } : (raw ?? {});
+  const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null);
+  const card = (c.card ?? {}) as Record<string, unknown>;
+
+  let text: string | null;
+  if (c.operation === 'reaction') text = str(c.emoji) && `(reaction ${c.emoji as string})`;
+  else if (c.operation === 'edit') text = str(c.text) && `(edited) ${c.text as string}`;
+  else if (c.type === 'card')
+    text = str(c.fallbackText) ?? ([str(card.title), str(card.description)].filter(Boolean).join('\n') || null);
+  else text = str(c.text) ?? str(c.markdown);
+
+  const files = (message.files ?? []).map((f) => `[file saved: ${save(f.filename, f.data)}]`);
+  const lines = [text, ...files].filter((l): l is string => l !== null);
+  return lines.length > 0 ? lines.join('\n') : null;
 }
 
 registerChannelAdapter('cli', { factory: createAdapter });

@@ -10,7 +10,7 @@ vi.mock('../config.js', async () => {
 import type { ChannelSetup } from './adapter.js';
 import { normalizeOptions } from './ask-question.js';
 import { getChannelAdapter, initChannelAdapters, teardownChannelAdapters } from './channel-registry.js';
-import { formatQuestionText, parseAnswerCommand, resolveOption } from './cli.js';
+import { formatOutbound, formatQuestionText, parseAnswerCommand, resolveOption } from './cli.js';
 
 const options = normalizeOptions([
   { label: 'Approve', selectedLabel: '✅ Approved', value: 'approve' },
@@ -46,6 +46,31 @@ describe('CLI question cards', () => {
     expect(resolveOption(options, 'REJECT')).toBe('reject');
     expect(resolveOption(options, '3')).toBeNull();
     expect(resolveOption(options, 'maybe')).toBeNull();
+  });
+});
+
+describe('CLI outbound text', () => {
+  const save = (name: string) => `data/cli-files/1-${name}`;
+  const msg = (content: unknown, files?: { filename: string; data: Buffer }[]) => ({ kind: 'chat', content, files });
+
+  it('shows text, markdown, edits and reactions', () => {
+    expect(formatOutbound(msg({ text: 'hi' }), save)).toBe('hi');
+    expect(formatOutbound(msg({ markdown: '**hi**' }), save)).toBe('**hi**');
+    expect(formatOutbound(msg({ operation: 'edit', messageId: 'm', text: 'fixed' }), save)).toBe('(edited) fixed');
+    expect(formatOutbound(msg({ operation: 'reaction', messageId: 'm', emoji: '👍' }), save)).toBe('(reaction 👍)');
+  });
+
+  it('shows a card by its fallback text, else its title and description', () => {
+    expect(formatOutbound(msg({ type: 'card', card: { title: 'T' }, fallbackText: 'plain' }), save)).toBe('plain');
+    expect(formatOutbound(msg({ type: 'card', card: { title: 'T', description: 'D' }, fallbackText: '' }), save)).toBe(
+      'T\nD',
+    );
+  });
+
+  it('saves attachments and prints their paths', () => {
+    const out = formatOutbound(msg({ text: 'report' }, [{ filename: 'a.pdf', data: Buffer.from('x') }]), save);
+    expect(out).toBe('report\n[file saved: data/cli-files/1-a.pdf]');
+    expect(formatOutbound(msg({}), save)).toBeNull();
   });
 });
 
