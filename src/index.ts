@@ -9,6 +9,7 @@ import path from 'path';
 import type { Server } from 'http';
 
 import { CREDENTIAL_PROXY_PORT, DATA_DIR } from './config.js';
+import { bootstrapFirstAgent } from './bootstrap.js';
 import { enforceStartupBackoff, resetCircuitBreaker } from './circuit-breaker.js';
 import { startCredentialProxy } from './credential-proxy.js';
 import { initDb } from './db/connection.js';
@@ -77,6 +78,10 @@ async function main(): Promise<void> {
   const db = initDb(dbPath);
   runMigrations(db);
   log.info('Central DB ready', { path: dbPath });
+
+  // 1b. First start: create the first agent and wire it to the local CLI
+  // when the DB has no agent groups. No-op afterwards.
+  bootstrapFirstAgent();
 
   // 2. Container runtime
   ensureContainerRuntimeRunning();
