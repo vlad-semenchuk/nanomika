@@ -29,10 +29,6 @@ export function revokeRole(userId: string, role: UserRoleKind, agentGroupId: str
   }
 }
 
-export function getUserRoles(userId: string): UserRole[] {
-  return getDb().prepare('SELECT * FROM user_roles WHERE user_id = ?').all(userId) as UserRole[];
-}
-
 export function isOwner(userId: string): boolean {
   const row = getDb()
     .prepare('SELECT 1 FROM user_roles WHERE user_id = ? AND role = ? AND agent_group_id IS NULL LIMIT 1')

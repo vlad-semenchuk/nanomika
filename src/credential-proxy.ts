@@ -115,7 +115,7 @@ export function detectAuthMode(): AuthMode {
 }
 
 /** Keys the proxy accepts as the credential; at least one must be in .env. */
-export const CREDENTIAL_KEYS = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN'] as const;
+const CREDENTIAL_KEYS = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN'] as const;
 
 /**
  * Fail fast at startup when .env holds no credential, instead of failing on
