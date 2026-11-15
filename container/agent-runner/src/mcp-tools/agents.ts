@@ -38,7 +38,7 @@ export const createAgent: McpToolDefinition = {
       type: 'object' as const,
       properties: {
         name: { type: 'string', description: 'Human-readable name (also becomes your destination name for this agent)' },
-        instructions: { type: 'string', description: 'CLAUDE.md content for the new agent (personality, role, instructions)' },
+        instructions: { type: 'string', description: 'Initial CLAUDE.local.md for the new agent: its role, personality and rules' },
       },
       required: ['name'],
     },
