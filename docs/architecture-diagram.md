@@ -28,7 +28,7 @@ flowchart TB
   subgraph Session["Per-Session Container (Docker)"]
     direction TB
     PollLoop["Poll Loop<br/>(container/agent-runner)"]
-    Provider["Agent providers<br/>(claude, mock)"]
+    Provider["Claude Agent SDK<br/>(claude provider)"]
     MCP["MCP Tools<br/>send_message, send_file, edit_message,<br/>add_reaction, send_card, ask_user_question,<br/>schedule_task (+ list/update/pause/resume/cancel),<br/>create_agent"]
     Skills["Container Skills<br/>(container/skills/)"]
     InDB[("inbound.db<br/>host writes<br/>even seq<br/>messages_in<br/>delivered<br/>destinations")]
@@ -130,7 +130,7 @@ erDiagram
   agent_groups ||--o{ sessions : runs
   messaging_groups ||--o{ sessions : context
   agent_groups ||--o{ agent_destinations : owns
-  agent_groups ||--o{ pending_approvals : requests
+  sessions ||--o{ pending_approvals : requests
 
   agent_groups {
     string id

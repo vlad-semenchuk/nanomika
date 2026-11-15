@@ -68,7 +68,7 @@ CREATE TABLE messaging_group_agents (
 );
 ```
 
-Column order and nullability reflect the migrations: 001 created the table, and migration `engage-modes` added the four `engage_*` / `sender_scope` / `ignored_message_policy` columns with `ALTER TABLE ADD COLUMN` (no SQL defaults) and dropped the original `trigger_rules` and `response_scope` columns. Callers always supply values: `ncl wirings create` defaults to `mention` / `all` / `drop`, and `src/bootstrap.ts` wires the CLI chat with `engage_mode = 'pattern'`, `engage_pattern = '.'`. `src/db/schema.ts` shows the intended shape with `NOT NULL DEFAULT`s, which the live table does not have.
+Column order and nullability reflect the migrations: 001 created the table, and migration `engage-modes` added the four `engage_*` / `sender_scope` / `ignored_message_policy` columns with `ALTER TABLE ADD COLUMN` (no SQL defaults) and dropped the original `trigger_rules` and `response_scope` columns. Callers always supply values: `ncl wirings create` defaults to `mention` / `all` / `drop`, and `src/bootstrap.ts` wires the CLI chat with `engage_mode = 'pattern'`, `engage_pattern = '.'`.
 
 - `session_mode`: `shared` (one session per channel), `per-thread` (one per thread), `agent-shared` (one per agent group across all channels). A threaded adapter in a group chat forces per-thread sessions regardless (except `agent-shared`).
 - `priority`: wirings for a messaging group are read in `priority DESC` order.
@@ -230,7 +230,7 @@ CREATE INDEX idx_pending_approvals_action_status ON pending_approvals(action, st
 ```
 
 - Rows are deleted by `src/modules/approvals/response-handler.ts` once the admin answers; `status` is always written as `pending`.
-- `agent_group_id`, `channel_type`, `platform_id`, `platform_message_id` and `expires_at` exist in the schema but nothing sets them (always NULL), and `updatePendingApprovalStatus()` has no callers.
+- `agent_group_id`, `channel_type`, `platform_id`, `platform_message_id` and `expires_at` exist in the schema but nothing sets them (always NULL), and no code updates `status` after insert.
 - Access layer: `src/db/sessions.ts`; read-only listing: `ncl approvals`.
 
 ### 1.12 `unregistered_senders`

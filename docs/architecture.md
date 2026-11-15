@@ -609,7 +609,7 @@ CREATE TABLE user_roles (
   user_id         TEXT NOT NULL REFERENCES users(id),
   role            TEXT NOT NULL,   -- 'owner' | 'admin'
   agent_group_id  TEXT REFERENCES agent_groups(id),  -- NULL for global
-  granted_by      TEXT,
+  granted_by      TEXT REFERENCES users(id),
   granted_at      TEXT NOT NULL,
   PRIMARY KEY (user_id, role, agent_group_id)
 );
@@ -619,7 +619,7 @@ CREATE TABLE user_roles (
 CREATE TABLE agent_group_members (
   user_id         TEXT NOT NULL REFERENCES users(id),
   agent_group_id  TEXT NOT NULL REFERENCES agent_groups(id),
-  added_by        TEXT,
+  added_by        TEXT REFERENCES users(id),
   added_at        TEXT NOT NULL,
   PRIMARY KEY (user_id, agent_group_id)
 );
@@ -638,15 +638,17 @@ CREATE TABLE messaging_group_agents (
   id                     TEXT PRIMARY KEY,
   messaging_group_id     TEXT NOT NULL REFERENCES messaging_groups(id),
   agent_group_id         TEXT NOT NULL REFERENCES agent_groups(id),
-  engage_mode            TEXT NOT NULL DEFAULT 'mention',  -- 'pattern' | 'mention' | 'mention-sticky'
+  engage_mode            TEXT,                             -- 'pattern' | 'mention' | 'mention-sticky'
   engage_pattern         TEXT,                             -- regex for 'pattern'; '.' = every message
-  sender_scope           TEXT NOT NULL DEFAULT 'all',      -- 'all' | 'known'
-  ignored_message_policy TEXT NOT NULL DEFAULT 'drop',     -- 'drop' | 'accumulate'
+  sender_scope           TEXT,                             -- 'all' | 'known'
+  ignored_message_policy TEXT,                             -- 'drop' | 'accumulate'
   session_mode           TEXT DEFAULT 'shared',            -- 'shared' | 'per-thread' | 'agent-shared'
   priority               INTEGER DEFAULT 0,
   created_at             TEXT NOT NULL,
   UNIQUE(messaging_group_id, agent_group_id)
 );
+-- engage_mode, sender_scope and ignored_message_policy have no SQL default.
+-- Callers always set them; `ncl wirings create` defaults to mention / all / drop.
 
 -- Sessions: one folder = one session = one container when running
 -- Folder path is derived: data/v2-sessions/{agent_group_id}/{session_id}/
@@ -657,7 +659,7 @@ CREATE TABLE sessions (
   thread_id          TEXT,              -- platform thread ID (null for shared session mode)
   agent_provider     TEXT,              -- override per session (null = inherit)
   status             TEXT DEFAULT 'active',    -- 'active' | 'closed'
-  container_status   TEXT DEFAULT 'stopped',   -- 'running' | 'stopped'
+  container_status   TEXT DEFAULT 'stopped',   -- 'running' | 'idle' | 'stopped'
   last_active        TEXT,              -- last message activity timestamp
   created_at         TEXT NOT NULL
 );

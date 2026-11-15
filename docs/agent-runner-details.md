@@ -238,7 +238,7 @@ Every prompt starts with a timezone header:
 
 **Batch formatting:** Multiple pending messages are combined into one prompt: the header, then all chat messages (one `<message>` per line, no outer wrapper), then tasks, webhooks and system blocks separated by blank lines.
 
-**Command detection:** `categorizeMessage()` classifies messages starting with `/`. `/clear` is handled by the runner itself: it clears the stored continuation and replies "Session cleared." For providers with `supportsNativeSlashCommands` (Claude), other admin commands (`/compact`, `/context`, `/cost`, `/files`, `/remote-control`) and unknown commands are passed raw to the SDK instead of XML-wrapped. Filtering and admin-permission gating happen on the host (`src/command-gate.ts`) before messages reach the container.
+**Command detection:** `categorizeMessage()` classifies messages starting with `/`. `/clear` is handled by the runner itself: it clears the stored continuation and replies "Session cleared." For providers with `supportsNativeSlashCommands` (Claude), other admin commands (`/compact`, `/context`, `/cost`, `/files`) and unknown commands are passed raw to the SDK instead of XML-wrapped. Filtering and admin-permission gating happen on the host (`src/command-gate.ts`) before messages reach the container.
 
 ### Output and Routing
 
