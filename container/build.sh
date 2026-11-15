@@ -32,7 +32,7 @@ CONTAINER_RUNTIME="${CONTAINER_RUNTIME:-docker}"
 
 # Caller's env takes precedence; fall back to .env.
 if [ -z "${INSTALL_CJK_FONTS:-}" ] && [ -f "../.env" ]; then
-    INSTALL_CJK_FONTS="$(grep '^INSTALL_CJK_FONTS=' ../.env | tail -n1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')"
+    INSTALL_CJK_FONTS="$(grep '^INSTALL_CJK_FONTS=' ../.env | tail -n1 | cut -d= -f2- | sed 's/[[:space:]]#.*$//' | tr -d '"' | tr -d "'" | tr -d '[:space:]')"
 fi
 
 BUILD_ARGS=()

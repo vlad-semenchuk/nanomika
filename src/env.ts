@@ -34,6 +34,9 @@ export function readEnvFile(keys: string[]): Record<string, string> {
       ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))
     ) {
       value = value.slice(1, -1);
+    } else {
+      // Unquoted value: a `#` after whitespace starts a trailing comment.
+      value = value.replace(/(^|\s+)#.*$/, '').trim();
     }
     if (value) result[key] = value;
   }
