@@ -69,6 +69,7 @@ interface ChatSdkBridgeConfig {
   botToken?: string;
   extractReplyContext?: ReplyContextExtractor;
   supportsThreads: boolean;
+  webhook?: boolean;                    // default true; false opens no port (Slack Socket Mode)
   transformOutboundText?: (text: string) => string;
   maxTextLength?: number;               // split longer outbound text
 }
