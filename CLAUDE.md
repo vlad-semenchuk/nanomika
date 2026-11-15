@@ -60,7 +60,7 @@ For ad-hoc queries use `pnpm exec tsx scripts/q.ts <db> "<sql>"` rather than the
 | `src/claude-md-compose.ts` | Composes the `CLAUDE.md` an agent sees from `container/CLAUDE.md` and module fragments |
 | `src/container-config.ts`, `src/db/container-configs.ts` | Per-group container config: DB rows, materialized to `groups/<folder>/container.json` at spawn |
 | `src/container-restart.ts` | Kill + on-wake respawn for agent group containers |
-| `src/channels/` | Channel adapters (`cli.ts`, `slack.ts`), the registry, the Chat SDK bridge |
+| `src/channels/` | Channel adapters (`cli.ts`, `telegram.ts`, `slack.ts`), the registry, the Chat SDK bridge |
 | `src/cli/` | The `ncl` admin CLI: socket server, dispatcher, resources |
 | `src/db/` | DB layer and migrations |
 | `src/modules/permissions/` | Sender resolution, access gate, sender and channel approval flows, `user_dms` |
@@ -76,7 +76,7 @@ For ad-hoc queries use `pnpm exec tsx scripts/q.ts <db> "<sql>"` rather than the
 
 ## Channels
 
-Only the local terminal channel (`src/channels/cli.ts`, socket `data/cli.sock`) is enabled. The Slack adapter is in the tree with its import commented out in `src/channels/index.ts`.
+The local terminal channel (`src/channels/cli.ts`, socket `data/cli.sock`) is always enabled. The Telegram adapter (`src/channels/telegram.ts`, polling) starts when `TELEGRAM_BOT_TOKEN` is in `.env`. The Slack adapter is in the tree with its import commented out in `src/channels/index.ts`.
 
 A channel is one file under `src/channels/` that implements `ChannelAdapter` (`src/channels/adapter.ts`) and calls `registerChannelAdapter`, plus one import line in `src/channels/index.ts`. See [docs/writing-a-channel.md](docs/writing-a-channel.md).
 

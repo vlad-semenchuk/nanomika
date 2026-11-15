@@ -142,6 +142,17 @@ Each of the two session files has exactly one writer, and they are the only link
 
 A channel is one file under `src/channels/` that implements the `ChannelAdapter` interface and registers itself, plus one import line in `src/channels/index.ts`. [docs/writing-a-channel.md](docs/writing-a-channel.md) walks through it with a complete example.
 
+## Enabling Telegram
+
+The Telegram adapter ships in the tree and starts when `TELEGRAM_BOT_TOKEN` is set. It uses long polling, so it needs no public URL and opens no port.
+
+1. Create a bot with [@BotFather](https://t.me/BotFather) and copy its token.
+2. Set `TELEGRAM_BOT_TOKEN` in `.env`.
+3. Restart the host.
+4. Send the bot a direct message. The first message from a new chat raises a request in your terminal asking which agent to connect it to. Answer it with `/answer` as above, then message the bot again.
+
+For a group, add the bot and mention it (`@yourbot hello`). Replies and the approval card work the same way. To let the bot see messages that are not mentions or commands, turn off Group Privacy in BotFather, then remove and re-add the bot.
+
 ## Enabling Slack
 
 A Slack adapter ships in the tree but is switched off.
