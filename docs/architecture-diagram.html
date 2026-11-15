@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>NanoMika Architecture</title>
-    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
     <style>
       :root {
         --bg: #0b0d12;
@@ -129,7 +129,7 @@
   <body>
     <header>
       <h1>NanoMika Architecture</h1>
-      <div class="sub">Session-DB messaging model · Chat SDK bridge · OneCLI credential gateway · per-session containers</div>
+      <div class="sub">Session-DB messaging model · channel adapters · host credential proxy · per-session containers</div>
       <nav>
         <a href="#overview">1 · Overview</a>
         <a href="#flow">2 · Message Flow</a>
@@ -143,59 +143,56 @@
       <section id="overview">
         <h2><span class="num">1</span>System Overview</h2>
         <p class="desc">
-          Inbound messages land at the Chat SDK bridge, which hands off to the
-          router. The router resolves the messaging group → agent group → session
+          Inbound messages land at a channel adapter (the local CLI by default),
+          which hands off to the router. The router resolves the messaging group → agent group → session
           and writes to the session's <code>inbound.db</code>. The container runner
-          spawns a per-session container (auth via OneCLI), and the agent-runner
+          spawns a per-session Docker container (API calls go through the host
+          credential proxy), and the agent-runner
           polls its DB, calls Claude, and writes responses to <code>outbound.db</code>.
           Delivery polls the outbound DB, re-validates destinations, and ships
-          messages back through the same bridge.
+          messages back through the same adapter.
         </p>
         <div class="diagram">
 <pre class="mermaid">
 flowchart TB
-  subgraph Platforms["Messaging Platforms"]
-    P1[Discord]
-    P2[Telegram]
-    P3[Slack]
-    P4[GitHub / Linear]
-    P5[WhatsApp / iMessage / Teams / GChat / Matrix / Webex / Email]
+  subgraph Platforms["Channels"]
+    P1["Local CLI<br/>src/channels/cli.ts (default)"]
+    P2["Slack<br/>src/channels/slack.ts (opt-in)"]
+    P3["Channels you write<br/>docs/writing-a-channel.md"]
   end
 
   subgraph Host["Host Process (Node)"]
     direction TB
-    Bridge["Chat SDK Bridge<br/>src/channels/chat-sdk-bridge.ts"]
+    Bridge["Channel Adapters<br/>src/channels/<br/>native or chat-sdk-bridge.ts"]
     Router["Router<br/>src/router.ts<br/>platformId + threadId → session"]
     SessMgr["Session Manager<br/>src/session-manager.ts"]
-    Runner["Container Runner<br/>src/container-runner.ts<br/>OneCLI ensureAgent + spawn"]
+    Runner["Container Runner<br/>src/container-runner.ts<br/>docker run"]
     Delivery["Delivery Poller<br/>src/delivery.ts<br/>1s active / 60s sweep"]
     Sweep["Host Sweep<br/>src/host-sweep.ts"]
     Central[("Central DB · data/v2.db<br/>agent_groups · messaging_groups<br/>messaging_group_agents · sessions<br/>pending_approvals")]
+    Approvals["Approvals module<br/>src/modules/approvals/"]
+    Proxy["Credential Proxy<br/>src/credential-proxy.ts · :3001"]
   end
 
-  subgraph OneCLI["OneCLI Gateway (0.3.1)"]
-    Vault["Agent Vault<br/>secrets + OAuth"]
-    Approvals["configureManualApproval"]
-  end
+  Anthropic["Anthropic API"]
 
-  subgraph Session["Per-Session Container"]
+  subgraph Session["Per-Session Container (Docker)"]
     direction TB
     PollLoop["Poll Loop<br/>container/agent-runner"]
-    Provider["Claude Agent SDK<br/>(codex / opencode planned)"]
-    MCP["MCP Tools<br/>send_message · send_file · edit_message<br/>send_card · ask_user_question · schedule_task<br/>create_agent · install_packages · add_mcp_server<br/>request_rebuild"]
+    Provider["Claude Agent SDK<br/>(claude provider)"]
+    MCP["MCP Tools<br/>send_message · send_file · edit_message<br/>add_reaction · send_card · ask_user_question<br/>schedule_task · create_agent"]
     InDB[("inbound.db<br/>host writes · even seq")]
     OutDB[("outbound.db<br/>container writes · odd seq")]
   end
 
-  Folder["Agent Group FS<br/>groups/*<br/>CLAUDE.md · memory · skills"]
+  Folder["Agent Group FS<br/>groups/*<br/>CLAUDE.md · CLAUDE.local.md · container.json"]
 
-  P1 & P2 & P3 & P4 & P5 --> Bridge
+  P1 & P2 & P3 --> Bridge
   Bridge --> Router
   Router --> Central
   Router --> SessMgr
   SessMgr --> InDB
   SessMgr --> Runner
-  Runner --> OneCLI
   Runner --> PollLoop
   PollLoop --> InDB
   PollLoop --> Provider
@@ -204,14 +201,15 @@ flowchart TB
   OutDB --> Delivery
   Delivery --> Central
   Delivery --> Bridge
-  Bridge --> P1 & P2 & P3 & P4 & P5
+  Bridge --> P1 & P2 & P3
   Sweep --> InDB
   Sweep --> OutDB
   Sweep --> Central
   Runner -.mounts.-> Folder
-  MCP -.approval.-> Approvals
+  Delivery -.approval-gated ncl.-> Approvals
   Approvals --> Central
-  Provider -.API calls.-> Vault
+  Provider -.API calls.-> Proxy
+  Proxy --> Anthropic
 </pre>
         </div>
       </section>
@@ -226,8 +224,8 @@ flowchart TB
         <div class="diagram">
 <pre class="mermaid">
 sequenceDiagram
-  participant P as Platform (Telegram)
-  participant B as Chat SDK Bridge
+  participant P as Platform (CLI terminal)
+  participant B as Channel Adapter
   participant R as Router
   participant SM as Session Manager
   participant IDB as inbound.db
@@ -236,16 +234,16 @@ sequenceDiagram
   participant D as Delivery Poller
 
   P->>B: new message
-  B->>R: routeInbound(platformId, threadId, msg)
+  B->>R: routeInbound(event)
   R->>R: resolve messaging_group → agent_group → session<br/>(agent-shared · shared · per-thread)
   R->>SM: ensure session + DBs exist
   R->>IDB: INSERT messages_in (even seq)
-  R->>C: wake container (spawn or signal)
+  R->>C: wake container (spawn or already running)
   C->>IDB: poll messages_in
   C->>C: format xml → Claude SDK stream
   C->>ODB: INSERT messages_out (odd seq)<br/>parse &lt;message to='name'&gt; blocks
   D->>ODB: 1s active poll / 60s sweep
-  D->>D: hasDestination() re-validate
+  D->>D: re-validate against agent_destinations
   D->>B: deliver via adapter
   B->>P: send · edit · react · file · card
 </pre>
@@ -255,9 +253,9 @@ sequenceDiagram
       <section id="destinations">
         <h2><span class="num">3</span>Named Destinations &amp; Agent-to-Agent</h2>
         <p class="desc">
-          Agents address outputs by local name. The host looks up each name against
-          the agent's destinations table at delivery time — dropping anything
-          unauthorized. The same table routes agent-to-agent messages to a sibling
+          Agents address outputs by local name. The agent-runner resolves each name
+          from the session's destinations table, and the host re-checks the
+          agent's permissions at delivery time — failing anything unauthorized. The same table routes agent-to-agent messages to a sibling
           agent's <code>inbound.db</code> with bidirectional permission rows.
         </p>
         <div class="diagram">
@@ -267,10 +265,10 @@ flowchart LR
     A_out["&lt;message to='slack'&gt;...&lt;/message&gt;<br/>&lt;message to='browser-agent'&gt;...&lt;/message&gt;<br/>&lt;internal&gt;scratchpad&lt;/internal&gt;"]
   end
 
-  subgraph Dests["inbound.db.destinations (per agent)"]
-    D1["slack → messaging_group 42"]
-    D2["browser-agent → agent_group 7<br/>(bidirectional)"]
-    D3["github → messaging_group 13"]
+  subgraph Dests["inbound.db.destinations (from agent_destinations)"]
+    D1["slack → Slack messaging group"]
+    D2["browser-agent → agent group<br/>(bidirectional)"]
+    D3["cli → cli/local messaging group"]
   end
 
   subgraph AgentB["Agent Group B (browser sub-agent)"]
@@ -278,12 +276,12 @@ flowchart LR
   end
 
   Slack[Slack]
-  GitHub[GitHub PR]
+  CLI[Local CLI]
 
   A_out -->|parse + lookup| Dests
   D1 -->|deliver| Slack
   D2 -->|write to B's inbound.db| B_session
-  D3 -->|deliver| GitHub
+  D3 -->|deliver| CLI
   B_session -.reply via 'parent'.-> Dests
 </pre>
         </div>
@@ -307,14 +305,13 @@ erDiagram
   agent_groups ||--o{ pending_approvals : requests
 
   agent_groups {
-    int id
+    string id
     string name
     string folder
     string agent_provider
-    json container_config
   }
   messaging_groups {
-    int id
+    string id
     string channel_type
     string platform_id
     string name
@@ -341,18 +338,22 @@ erDiagram
     string messaging_group_id FK
   }
   messaging_group_agents {
-    int messaging_group_id
-    int agent_group_id
+    string messaging_group_id
+    string agent_group_id
     string session_mode
-    json trigger_rules
+    string engage_mode
+    string engage_pattern
+    string sender_scope
+    string ignored_message_policy
     int priority
   }
   sessions {
-    int id
-    int agent_group_id
-    int messaging_group_id
-    string sdk_session_id
+    string id
+    string agent_group_id
+    string messaging_group_id
+    string thread_id
     string status
+    string container_status
   }
 </pre>
         </div>
@@ -361,8 +362,8 @@ erDiagram
             <tr><th>Level</th><th>session_mode</th><th>Shared</th><th>Example</th></tr>
           </thead>
           <tbody>
-            <tr><td>1 · Shared session</td><td><code>agent-shared</code></td><td>Workspace + memory + conversation</td><td>Slack + GitHub webhooks in one thread</td></tr>
-            <tr><td>2 · Same agent, separate sessions</td><td><code>shared</code> / <code>per-thread</code></td><td>Workspace + memory only</td><td>One agent across 3 Telegram chats</td></tr>
+            <tr><td>1 · Shared session</td><td><code>agent-shared</code></td><td>Workspace + memory + conversation</td><td>CLI + a Slack channel in one conversation</td></tr>
+            <tr><td>2 · Same agent, separate sessions</td><td><code>shared</code> / <code>per-thread</code></td><td>Workspace + memory only</td><td>One agent across 3 Slack channels</td></tr>
             <tr><td>3 · Separate agent groups</td><td>— (different agent_group_id)</td><td>Nothing</td><td>Personal vs work channels</td></tr>
           </tbody>
         </table>
@@ -389,14 +390,14 @@ flowchart LR
   Host -->|reads| Out
   Container[agent-runner] -->|reads| In
   Container -->|writes · odd seq| Out
-  Container -->|touch every poll| HB
+  Container -->|touch on agent activity| HB
   HostSweep[Host sweep] -->|stat mtime| HB
-  HostSweep -->|reads processing_ack| In
+  HostSweep -->|reads processing_ack| Out
 </pre>
         </div>
       </section>
 
-      <footer>NanoMika · generated from docs/checklist.md, architecture.md, isolation-model.md</footer>
+      <footer>NanoMika · see docs/architecture.md and docs/isolation-model.md</footer>
     </main>
 
     <script>

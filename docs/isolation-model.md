@@ -1,6 +1,8 @@
 # Channel Isolation Model
 
-NanoMika decouples messaging channels from agent groups. When you connect a channel (Discord, Telegram, Slack, GitHub, etc.), you decide how it relates to your existing agents. There are three isolation levels.
+NanoMika decouples messaging channels from agent groups. When you connect a channel, you decide how it relates to your existing agents. There are three isolation levels.
+
+Only the local CLI channel (`src/channels/cli.ts`) is enabled by default; a Slack adapter is in the tree (`src/channels/slack.ts`, import commented out in `src/channels/index.ts`). Other platforms named below (GitHub, Telegram, Discord, Linear) are examples of channel adapters you could write — none of them ship.
 
 ## The Three Levels
 
@@ -48,6 +50,29 @@ Each channel gets its own agent with its own workspace, memory, and personality.
 
 ---
 
+## Applying a Level with `ncl`
+
+The isolation level is set per wiring (`messaging_group_agents` row) with the `ncl` admin CLI (`pnpm run ncl ...` or `bin/ncl`, against a running host). Flags come from `src/cli/resources/wirings.ts`; column names map to `--kebab-case` flags.
+
+```bash
+# Shared session (level 1): wire each messaging group to the same agent group
+ncl wirings create --messaging-group-id <mg-id> --agent-group-id <ag-id> --session-mode agent-shared
+
+# Same agent, separate sessions (level 2)
+ncl wirings create --messaging-group-id <mg-id> --agent-group-id <ag-id> --session-mode shared   # or per-thread
+
+# Separate agent groups (level 3): create a new agent group, then wire the chat to it
+ncl groups create --name <name> --folder <folder>
+ncl wirings create --messaging-group-id <mg-id> --agent-group-id <new-ag-id>
+
+# Change the level of an existing wiring
+ncl wirings update --id <wiring-id> --session-mode agent-shared
+```
+
+`ncl wirings create` also accepts `--engage-mode`, `--engage-pattern`, `--sender-scope` and `--ignored-message-policy` (see `ncl wirings help`). It inserts only the wiring row; if the agent must send to a chat other than the one a session started from (common with `agent-shared`), add a destination too: `ncl destinations add --agent-group-id <ag-id> --local-name <name> --target-type channel --target-id <mg-id>`.
+
+---
+
 ## How to Decide
 
 The key question: **Are you okay with any and every piece of information from one channel being available in the other?**
@@ -80,7 +105,7 @@ agent_groups (workspace, memory, CLAUDE.md, personality)
     ↕ many-to-many
 messaging_groups (a specific channel/chat/group on a platform)
     via
-messaging_group_agents (session_mode, trigger_rules, priority)
+messaging_group_agents (session_mode, engage_mode, engage_pattern, sender_scope, priority)
 ```
 
 - **Shared session:** multiple messaging_groups → same agent_group, `session_mode = 'agent-shared'`

@@ -2,7 +2,7 @@
 
 Reference for the two SQLite files each session owns: `inbound.db` (host writes, container reads) and `outbound.db` (container writes, host reads). Start with [db.md](db.md) for the three-DB overview, the single-writer rule, and the cross-mount visibility constraints.
 
-Schemas live in `src/db/schema.ts` as the `INBOUND_SCHEMA` and `OUTBOUND_SCHEMA` constants. Both files are created by `ensureSchema()` in `src/session-manager.ts` when a new session folder is provisioned.
+Schemas live in `src/db/schema.ts` as the `INBOUND_SCHEMA` and `OUTBOUND_SCHEMA` constants. Both files are created by `ensureSchema()` in `src/db/session-db.ts`, called from `initSessionFolder()` in `src/session-manager.ts` when a new session folder is provisioned.
 
 ---
 
@@ -10,14 +10,14 @@ Schemas live in `src/db/schema.ts` as the `INBOUND_SCHEMA` and `OUTBOUND_SCHEMA`
 
 ```
 data/v2-sessions/<agent_group_id>/<session_id>/
-  inbound.db              ← host writes, container reads (read-only mount)
+  inbound.db              ← host writes, container reads (opened read-only)
   outbound.db             ← container writes, host reads (read-only open)
   .heartbeat              ← mtime touched by container (not a DB write)
   inbox/<message_id>/     ← user attachments, decoded from inbound message content
   outbox/<message_id>/    ← attachments the agent produced
 ```
 
-One session = one folder = one pair of DBs. The `agent_group_id` parent directory also holds per-group state (`.claude-shared/`, `agent-runner-src/`) that is shared across every session of that agent group.
+One session = one folder = one pair of DBs. The whole session folder is mounted into the container at `/workspace`. The `agent_group_id` parent directory also holds per-group state (`.claude-shared/`, mounted at `/home/node/.claude`) that is shared across every session of that agent group.
 
 Path helpers in `src/session-manager.ts`: `sessionDir()`, `inboundDbPath()`, `outboundDbPath()`, `heartbeatPath()`.
 
@@ -55,7 +55,7 @@ CREATE INDEX idx_messages_in_series ON messages_in(series_id);
 
 Content shapes: see [api-details.md §Session DB Schema Details](api-details.md#session-db-schema-details).
 
-**Writers (host):** `insertMessage()`, `insertTask()`, `insertRecurrence()` — all in `src/db/session-db.ts`. Each calls `nextEvenSeq()`.
+**Writers (host):** `insertMessage()` in `src/db/session-db.ts`; `insertTask()`, `insertRecurrence()` in `src/modules/scheduling/db.ts`. Each calls `nextEvenSeq()`.
 **Reader (container):** `container/agent-runner/src/db/messages-in.ts` — polls `status='pending' AND (process_after IS NULL OR process_after <= now)`.
 
 ### 2.2 `delivered`
@@ -71,7 +71,7 @@ CREATE TABLE delivered (
 );
 ```
 
-Writer: `markDelivered()` / `markDeliveryFailed()` in `src/db/session-db.ts`. Older session DBs are brought up to schema lazily by `migrateDeliveredTable()`.
+Writer: `markDelivered()` / `markDeliveryFailed()` in `src/db/session-db.ts`. Older session DBs are brought up to schema lazily by `migrateDeliveredTable()` (called from `src/delivery.ts`).
 
 ### 2.3 `destinations`
 
@@ -88,7 +88,7 @@ CREATE TABLE destinations (
 );
 ```
 
-Rewritten wholesale (DELETE + INSERT in a transaction) by `writeDestinations()` on every container wake and on demand when wiring changes mid-session. The comment on the table in `src/db/schema.ts` is the canonical statement of the refresh semantics.
+Rewritten wholesale (DELETE + INSERT in a transaction, `replaceDestinations()` in `src/db/session-db.ts`) by `writeDestinations()` (`src/modules/agent-to-agent/write-destinations.ts`) on every container wake and on demand when wiring changes mid-session. The comment on the table in `src/db/schema.ts` is the canonical statement of the refresh semantics.
 
 ### 2.4 `session_routing`
 
@@ -103,7 +103,7 @@ CREATE TABLE session_routing (
 );
 ```
 
-Written by `writeSessionRouting()` on every container wake, derived from `sessions.messaging_group_id` + `sessions.thread_id`.
+Written by `writeSessionRouting()` (`src/session-manager.ts`) on every container wake, derived from `sessions.messaging_group_id` + `sessions.thread_id`. Read in the container by `getSessionRouting()` (`container/agent-runner/src/db/session-routing.ts`).
 
 ---
 
@@ -111,12 +111,12 @@ Written by `writeSessionRouting()` on every container wake, derived from `sessio
 
 Every message (in or out) gets a monotonic integer `seq`, unique *within the session* across both tables.
 
-- **Host writes even seq** (2, 4, 6, …) to `messages_in` — `nextEvenSeq()` at `src/db/session-db.ts:75`.
+- **Host writes even seq** (2, 4, 6, …) to `messages_in` — `nextEvenSeq()` at `src/db/session-db.ts:89`.
 - **Container writes odd seq** (1, 3, 5, …) to `messages_out` — logic at `container/agent-runner/src/db/messages-out.ts:54` (`max % 2 === 0 ? max + 1 : max + 2`), reading `MAX(seq)` across *both* tables to preserve global ordering.
 
-Why disjoint? `seq` is the agent-facing message ID. When the agent calls `edit_message(seq=5)` or `add_reaction(seq=6)`, `getMessageIdBySeq()` uses the parity to route the lookup: odd → `messages_out`, even → `messages_in`. The parity alone disambiguates without a join. Collisions would break editing.
+Why disjoint? `seq` is the agent-facing message ID. When the agent calls `edit_message(seq=5)` or `add_reaction(seq=6)`, `getMessageIdBySeq()` (`container/agent-runner/src/db/messages-out.ts`) uses the parity to route the lookup: odd → `messages_out`, even → `messages_in`. The parity alone disambiguates without a join. Collisions would break editing.
 
-If you add a code path that writes to either table, preserve parity — the invariant isn't enforced by a constraint, only by the two helper functions.
+If you add a code path that writes to either table, preserve parity — the invariant isn't enforced by a constraint, only by `nextEvenSeq()` and `writeMessageOut()`.
 
 ---
 
@@ -147,7 +147,7 @@ CREATE TABLE messages_out (
 Content shapes: see [api-details.md §Session DB Schema Details](api-details.md#session-db-schema-details).
 
 **Writer (container):** `writeMessageOut()` in `container/agent-runner/src/db/messages-out.ts`.
-**Readers (host):** `src/delivery.ts` (polling delivery), `getMessageIdBySeq()` / `getRoutingBySeq()` for edit/reaction targeting.
+**Readers:** host — `src/delivery.ts` (polling delivery via `getDueOutboundMessages()`); container — `getMessageIdBySeq()` / `getRoutingBySeq()` in `container/agent-runner/src/db/messages-out.ts` for edit/reaction targeting.
 
 ### 4.2 `processing_ack`
 
@@ -161,11 +161,11 @@ CREATE TABLE processing_ack (
 );
 ```
 
-Crash recovery: on container startup, stale `processing` entries get cleared. Host-side sync: `syncProcessingAcks()` in `src/host-sweep.ts`.
+Writer: `container/agent-runner/src/db/messages-in.ts`. Crash recovery: on container startup, stale `processing` entries get cleared (`container/agent-runner/src/db/connection.ts`). Host-side sync: `syncProcessingAcks()` in `src/db/session-db.ts`, called from `src/host-sweep.ts`.
 
 ### 4.3 `session_state`
 
-Persistent container-owned KV store. Main consumer is the Chat SDK session ID — storing it here lets the agent's conversation resume across container restarts. Cleared by `/clear`.
+Persistent container-owned KV store. Main consumer is each agent provider's continuation id (key `continuation:<provider>`, e.g. the Claude Agent SDK session ID) — storing it here lets the agent's conversation resume across container restarts. `/clear` removes the current provider's continuation.
 
 ```sql
 CREATE TABLE session_state (
@@ -177,10 +177,26 @@ CREATE TABLE session_state (
 
 Access: `container/agent-runner/src/db/session-state.ts`.
 
+### 4.4 `container_state`
+
+Single-row (`id=1`) record of the tool currently in flight. The container writes it on `PreToolUse` and clears it on `PostToolUse` / `PostToolUseFailure`; the host sweep reads it to widen the stuck-container tolerance while a Bash command with a declared timeout over 60s is running.
+
+```sql
+CREATE TABLE container_state (
+  id                       INTEGER PRIMARY KEY CHECK (id = 1),
+  current_tool             TEXT,
+  tool_declared_timeout_ms INTEGER,
+  tool_started_at          TEXT,
+  updated_at               TEXT NOT NULL
+);
+```
+
+Writer: `setContainerToolInFlight()` / `clearContainerToolInFlight()` in `container/agent-runner/src/db/connection.ts`, called from the tool hooks in `container/agent-runner/src/providers/claude.ts`. Reader: `getContainerState()` in `src/db/session-db.ts`, called from `src/host-sweep.ts`.
+
 ---
 
 ## 5. Schema evolution
 
-Unlike the central DB, session DBs do **not** go through numbered migrations. Both `INBOUND_SCHEMA` and `OUTBOUND_SCHEMA` use `CREATE TABLE IF NOT EXISTS`, so a fresh session always gets the current shape. For session folders created under older builds, column-level gaps are patched lazily on open — e.g. `migrateDeliveredTable()` in `src/db/session-db.ts` adds `platform_message_id` and `status` to the `delivered` table if missing.
+Unlike the central DB, session DBs do **not** go through numbered migrations. Both `INBOUND_SCHEMA` and `OUTBOUND_SCHEMA` use `CREATE TABLE IF NOT EXISTS`, so a fresh session always gets the current shape. For session folders created under older builds, column-level gaps are patched lazily on open — `migrateDeliveredTable()` in `src/db/session-db.ts` adds `platform_message_id` and `status` to the `delivered` table if missing, and `migrateMessagesInTable()` (called when the host opens `inbound.db` via `src/session-manager.ts`) adds `series_id`, `trigger`, `source_session_id` and `on_wake` to `messages_in`. On the container side, `getOutboundDb()` in `container/agent-runner/src/db/connection.ts` creates `session_state` and `container_state` if missing.
 
 If you add a column to either schema, add a matching lazy migration for existing session folders, and prefer nullable columns or defaulted values so no data backfill is required.
