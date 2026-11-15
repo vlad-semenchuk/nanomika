@@ -218,8 +218,18 @@ async function main(): Promise<void> {
 }
 
 /** Graceful shutdown. */
+let shuttingDown = false;
+
 async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
   log.info('Shutdown signal received', { signal });
+  // Idle client connections can keep server.close() waiting forever.
+  setTimeout(() => {
+    log.warn('Shutdown took too long, exiting');
+    resetCircuitBreaker();
+    process.exit(0);
+  }, 5000).unref();
   for (const cb of getShutdownCallbacks()) {
     try {
       await cb();
@@ -244,6 +254,8 @@ async function shutdown(signal: string): Promise<void> {
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
+// Closing the terminal that runs the host is a normal stop, not a crash.
+process.on('SIGHUP', () => shutdown('SIGHUP'));
 
 main().catch((err) => {
   log.fatal('Startup failed', { err });
