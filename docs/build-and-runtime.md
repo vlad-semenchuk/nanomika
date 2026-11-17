@@ -69,7 +69,7 @@ Any failure fails the PR.
 
 - **Session DBs must use `journal_mode=DELETE`.** WAL's `-shm` memory-map doesn't cross VirtioFS between host and guest. See the doc comment at the top of `container/agent-runner/src/db/connection.ts` and `src/session-manager.ts`.
 - **Named SQL parameters in the container require the prefix in JS object keys.** `bun:sqlite` does not auto-strip `@`/`$`/`:` the way `better-sqlite3` does on the host. Use `$name` in both SQL and keys: `.run({ $id: msg.id })`. Positional `?` params work normally.
-- **Agent-runner tests run under `bun:test`, not vitest.** `vitest.config.ts` only includes `*.test.ts` files under `src/` and the top-level scripts directory (e.g. `scripts/q.test.ts`), so the `container/agent-runner/` tree is never picked up — vitest runs on Node and can't load `bun:sqlite`.
+- **Agent-runner tests run under `bun:test`, not vitest.** `vitest.config.ts` only includes `*.test.ts` files under `src/` (host tests live in `src/test/`, mirroring the source tree) and the top-level scripts directory (e.g. `scripts/q.test.ts`), so the `container/agent-runner/` tree is never picked up — vitest runs on Node and can't load `bun:sqlite`.
 - **No tsc build step in the container image.** Adding one would put a compile step back on every session wake.
 - **Global container CLIs stay on pnpm, not Bun.** `agent-browser`, `@anthropic-ai/claude-code` and any future Node CLIs the agent invokes should be pinned versions under the Dockerfile's pnpm global-install block. `bun install -g` would bypass the pnpm `only-built-dependencies` allowlist.
 
