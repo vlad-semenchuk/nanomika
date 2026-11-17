@@ -10,7 +10,7 @@ A small personal Claude agent you can read end to end. One Node process on your 
 ## Requirements
 
 - macOS or Linux
-- Node.js 22 and pnpm 10
+- Node.js 24 and pnpm 10
 - Docker (Docker Desktop on macOS, Docker Engine on Linux), running
 - An Anthropic API key, or a Claude subscription token
 

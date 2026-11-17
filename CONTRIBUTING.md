@@ -8,7 +8,7 @@
 
 ## Dev setup
 
-Requires Node 22, pnpm 10, Docker, and Bun (for the agent-runner tests).
+Requires Node 24, pnpm 10, Docker, and Bun (for the agent-runner tests).
 
 ```
 pnpm install

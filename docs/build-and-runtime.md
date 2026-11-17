@@ -4,13 +4,13 @@ NanoMika runs a split stack: the host is Node + pnpm, the agent container is Bun
 
 ## Why the split
 
-- **Host stays on Node** (22.x, per `engines` in `package.json`) because it depends on `better-sqlite3`, a native Node addon. Bun's Node-API compat has improved, but this isn't where we want risk.
+- **Host stays on Node** (24.x, per `engines` in `package.json`) because it depends on `better-sqlite3`, a native Node addon. Bun's Node-API compat has improved, but this isn't where we want risk.
 - **Container runs Bun** because `bun:sqlite` is built-in (no native compile of `better-sqlite3` per image rebuild), source runs directly (no tsc build step at image build or session wake), and `bun install` is ~5-10× faster than `npm install`.
 
 Host and container each have their own package tree:
 
 ```
-/                             pnpm + Node 22
+/                             pnpm + Node 24
   pnpm-lock.yaml              host deps (better-sqlite3, cron-parser, dev tooling)
   pnpm-workspace.yaml         minimumReleaseAge + onlyBuiltDependencies policy
 
@@ -38,7 +38,7 @@ Both are committed. CI installs both with `--frozen-lockfile`, and the Dockerfil
 
 ## Image build surface
 
-`container/Dockerfile` is a single-stage build on `node:22-slim`. Build it with `pnpm run build:image` (runs `container/build.sh`), which tags it `nanomika-agent-v2-<first 8 hex chars of sha1(checkout path)>:latest` — the same name `src/install-slug.ts` computes for the host and spawns (`CONTAINER_IMAGE_BASE` overrides the name in `build.sh`; the host spawns `CONTAINER_IMAGE` instead when that is set).
+`container/Dockerfile` is a single-stage build on `node:24-slim`. Build it with `pnpm run build:image` (runs `container/build.sh`), which tags it `nanomika-agent-v2-<first 8 hex chars of sha1(checkout path)>:latest` — the same name `src/install-slug.ts` computes for the host and spawns (`CONTAINER_IMAGE_BASE` overrides the name in `build.sh`; the host spawns `CONTAINER_IMAGE` instead when that is set).
 
 - **Pinned ARGs** — `BUN_VERSION`, `CLAUDE_CODE_VERSION`, `PNPM_VERSION`, `AGENT_BROWSER_VERSION`. The base image is pinned by digest. Bump deliberately in PRs.
 - **CJK fonts** — `ARG INSTALL_CJK_FONTS=false`. `container/build.sh` reads `INSTALL_CJK_FONTS` from `.env` and passes it through. Default build saves ~200MB; opt in when the user works with Chinese/Japanese/Korean content.
@@ -52,7 +52,7 @@ Both are committed. CI installs both with `--frozen-lockfile`, and the Dockerfil
 
 ## CI shape
 
-`.github/workflows/ci.yml` runs on pull requests to `main`. It installs pnpm, Node 22 (with pnpm cache) and Bun 1.3.12, then runs in order:
+`.github/workflows/ci.yml` runs on pull requests to `main`. It installs pnpm, Node 24 (with pnpm cache) and Bun 1.3.12, then runs in order:
 
 1. `pnpm install --frozen-lockfile` (host)
 2. `bun install --frozen-lockfile` in `container/agent-runner/` (container)

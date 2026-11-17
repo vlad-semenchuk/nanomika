@@ -10,7 +10,7 @@
 # bind mount at runtime (see src/container-runner.ts). Source-only changes
 # never require an image rebuild.
 
-FROM node:22-slim@sha256:7af03b14a13c8cdd38e45058fd957bf00a72bbe17feac43b1c15a689c029c732
+FROM node:24-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
 
 # ---- Build-time arguments ----------------------------------------------------
 # CJK fonts add ~200MB. Opt in only if you render Chinese/Japanese/Korean text.
