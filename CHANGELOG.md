@@ -2,6 +2,13 @@
 
 All notable changes to NanoMika are documented in this file.
 
+## [Unreleased]
+
+### Removed
+
+- The Chat SDK bridge, the Slack adapter, the shared webhook server (`WEBHOOK_PORT`), `SqliteStateAdapter` and the `slack-formatting` skill, together with the `chat` and `@chat-adapter/slack` packages. Channels implement `ChannelAdapter` directly. The `chat-sdk` message kind string stays for card and question messages.
+- The `chat_sdk_*` state tables. Migration `016-drop-chat-sdk-state` drops them if present.
+
 ## [3.0.0] - standalone core
 
 Rebuild of the project as a small, standalone core that you clone, run and extend with your own channel. History before this point is in git; tag `v2.0.70` marks the last version before the rebuild.
@@ -29,7 +36,7 @@ Rebuild of the project as a small, standalone core that you clone, run and exten
 
 ### Changed
 
-- The local terminal channel is the only channel enabled by default. The Slack adapter stays in the tree; enable it by uncommenting one import (see the README).
+- The local terminal channel is the only channel enabled by default. The Slack adapter was in the tree at this version and has since been removed (see Unreleased).
 - `.env` values may be followed by a `# comment`.
 - `minimumReleaseAge` in `pnpm-workspace.yaml` is now at the top level, where pnpm reads it.
 - `agent-browser` in the agent image is pinned to an exact version.

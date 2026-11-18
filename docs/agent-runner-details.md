@@ -329,7 +329,7 @@ Implementation:
 4. When found, mark it completed and return `selectedOption` as the tool result
 5. If the timeout expires, return an error result
 
-On the host, delivery records the question in `pending_questions`; the channel renders it (buttons on Chat SDK channels; numbered text on the CLI channel, answered with `pnpm run chat /answer <questionId> <number|option>`).
+On the host, delivery records the question in `pending_questions`; the channel renders it (the CLI channel prints numbered text options, answered with `pnpm run chat /answer <questionId> <number|option>`).
 
 #### send_card
 

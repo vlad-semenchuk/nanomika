@@ -142,16 +142,6 @@ Each of the two session files has exactly one writer, and they are the only link
 
 A channel is one file under `src/channels/` that implements the `ChannelAdapter` interface and registers itself, plus one import line in `src/channels/index.ts`. [docs/writing-a-channel.md](docs/writing-a-channel.md) walks through it with a complete example.
 
-## Enabling Slack
-
-A Slack adapter ships in the tree but is switched off.
-
-1. Create a Slack app with Socket Mode enabled, a bot token (`xoxb-…`) and an app-level token (`xapp-…`).
-2. Set `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` in `.env`.
-3. Uncomment the `./slack.js` import in `src/channels/index.ts`.
-4. Restart the host.
-5. Mention the bot in a channel or send it a direct message. The first message from a new chat raises a request in your terminal asking which agent to connect it to. Answer it with `/answer` as above.
-
 ## Configuration
 
 Secrets and a few settings live in `.env`. See [.env.example](.env.example) for the full list.

@@ -4,14 +4,14 @@ NanoMika runs a split stack: the host is Node + pnpm, the agent container is Bun
 
 ## Why the split
 
-- **Host stays on Node** (22.x, per `engines` in `package.json`) because it depends on `better-sqlite3`, a native Node addon, and the Chat SDK channel adapters. Bun's Node-API compat has improved, but this isn't where we want risk.
+- **Host stays on Node** (22.x, per `engines` in `package.json`) because it depends on `better-sqlite3`, a native Node addon. Bun's Node-API compat has improved, but this isn't where we want risk.
 - **Container runs Bun** because `bun:sqlite` is built-in (no native compile of `better-sqlite3` per image rebuild), source runs directly (no tsc build step at image build or session wake), and `bun install` is ~5-10× faster than `npm install`.
 
 Host and container each have their own package tree:
 
 ```
 /                             pnpm + Node 22
-  pnpm-lock.yaml              host deps (Chat SDK + Slack adapter, better-sqlite3, cron-parser, etc.)
+  pnpm-lock.yaml              host deps (better-sqlite3, cron-parser, dev tooling)
   pnpm-workspace.yaml         minimumReleaseAge + onlyBuiltDependencies policy
 
 /container/agent-runner/      Bun 1.3+

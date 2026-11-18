@@ -64,7 +64,7 @@ The proxy has no authentication. Anything that can reach its port can make API c
 
 Agents can call the Anthropic API through the proxy without limit. NanoMika sets no spending cap. Set one on the credential itself.
 
-Channel tokens, such as the Slack tokens, are also read from `.env` and are used only by the host.
+Channel tokens (for any channel you add) are also read from `.env` and are used only by the host.
 
 ## 4. Local sockets
 
@@ -115,7 +115,7 @@ Files an agent sends, to a chat or to another agent, are read from the session's
 
 - Containers have unrestricted outbound network access. An agent that reads untrusted content can be tricked into sending data it can see to a third party. Mount only what the agent needs.
 - The credential proxy listens on port 3001 (`CREDENTIAL_PROXY_PORT`), as described above.
-- The Slack adapter in Socket Mode opens no listening port. In webhook mode (no `SLACK_APP_TOKEN`) the host listens on `0.0.0.0:3000` (`WEBHOOK_PORT`), and the Slack adapter uses `SLACK_SIGNING_SECRET` to verify incoming requests.
+- The host opens no other listening port. The local CLI channel uses the Unix sockets `data/cli.sock` and `data/ncl.sock`. A channel you add that listens on the network is responsible for authenticating its own requests.
 
 ## Not protected
 

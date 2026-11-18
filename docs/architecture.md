@@ -54,7 +54,7 @@ Channel adapters are responsible for:
 
 The channel adapter does NOT know about agent group IDs or session IDs. It returns platform-level identifiers. The host maps those to the entity model.
 
-The interface is `ChannelAdapter` in `src/channels/adapter.ts`. Adapters self-register with `registerChannelAdapter()` (`src/channels/channel-registry.ts`) when imported from the barrel `src/channels/index.ts`. Only the local CLI channel (`src/channels/cli.ts`) is imported by default; `src/channels/slack.ts` is in the tree with its import line commented out. To add another channel, see [writing-a-channel.md](writing-a-channel.md).
+The interface is `ChannelAdapter` in `src/channels/adapter.ts`. Adapters self-register with `registerChannelAdapter()` (`src/channels/channel-registry.ts`) when imported from the barrel `src/channels/index.ts`. Only the local CLI channel (`src/channels/cli.ts`) is imported by default; to add another channel, see [writing-a-channel.md](writing-a-channel.md).
 
 The two-level ID scheme (channel ID + thread ID) gives flexibility. An adapter declares `supportsThreads`:
 - `supportsThreads: false` — the router strips thread IDs; the channel itself is the conversation.
@@ -95,33 +95,9 @@ When a message arrives for a conversation with no `messaging_groups` row, the ro
 
 No `channel_configs` table — channel-type-level behavior is in the adapter code.
 
-### Chat SDK Integration
+### Channel implementations
 
-Chat SDK adapters are wrapped per-channel by `src/channels/chat-sdk-bridge.ts`:
-- Each Chat SDK adapter gets its own Chat instance
-- Concurrency mode is configured per-channel (default `concurrent`)
-- The bridge wraps the Chat instance + adapter to conform to NanoMika's `ChannelAdapter` interface
-- Chat SDK handles: webhook parsing, dedup, platform API calls, rich content delivery. Its state is stored in the central DB (`chat_sdk_*` tables, `src/state-sqlite.ts`)
-- NanoMika handles: routing, agent lifecycle, session management
-
-Webhook-mode Chat SDK adapters are served by `src/webhook-server.ts` (`/webhook/{adapterName}`), started lazily on first registration.
-
-**Chat SDK's subscription model:**
-
-Chat SDK has its own thread-level subscription concept (distinct from NanoMika's channel-level registration):
-- `onNewMention` / `onNewMessage(regex)` — fires on first contact (e.g., @mention in a Slack thread)
-- `thread.subscribe()` — opts into all future messages in that thread
-- `onSubscribedMessage` — fires for all messages in subscribed threads
-
-This is sub-channel granularity. NanoMika registers at the channel level. Chat SDK subscribes at the thread level. The router asks the adapter to `subscribe()` a thread when a `mention-sticky` wiring first engages there.
-
-**Platform capability differences:**
-
-Capabilities vary significantly across Chat SDK adapters (see [Chat SDK adapter docs](https://chat-sdk.dev/docs/adapters)). Slack, the one Chat SDK channel in the tree, supports rich content (Block Kit cards, reactions, edits). Other platforms differ — some have no cards, reactions or edits.
-
-The bridge handles graceful degradation — if an agent posts a card on a platform that doesn't support cards, it falls back to text.
-
-Non-Chat-SDK channels, such as the local CLI channel, implement the `ChannelAdapter` interface directly — no bridge, no Chat SDK types.
+Channels implement the `ChannelAdapter` interface directly, as the local CLI channel does. NanoMika handles routing, agent lifecycle and session management; the adapter handles platform parsing, dedup and API calls. Capabilities (cards, reactions, edits) vary by platform. An adapter that cannot render a card should fall back to the card's `fallbackText`. The router calls the optional `subscribe()` on the adapter when a `mention-sticky` wiring first engages in a thread.
 
 ## Container Lifecycle
 
@@ -137,7 +113,7 @@ When a container spins up, the agent-runner immediately starts polling its inbou
 ### Inbound
 
 Media is not downloaded by the host. Instead:
-- A channel adapter either passes attachment URLs through, or includes the file bytes as base64 `data` on the attachment (the Chat SDK bridge does this)
+- A channel adapter either passes attachment URLs through, or includes the file bytes as base64 `data` on the attachment
 - When an attachment carries `data`, the host writes it to the session folder at `inbox/{messageId}/{filename}` and replaces `data` with a `localPath` before writing the `messages_in` row (`src/session-manager.ts`, with path-safety checks)
 - The agent-runner lists attachments in the prompt text: saved files as `/workspace/inbox/{messageId}/{filename}`, others by URL. The agent uses tools (Read, Bash) to access them.
 
@@ -165,7 +141,7 @@ Outbound files use a dedicated `send_file` MCP tool (separate from `send_message
 
 ### Message Deduplication
 
-Dedup is the channel adapter's responsibility. Chat SDK handles this internally. Native adapters track platform message IDs as needed. The host does not deduplicate — if the adapter forwards it, the host writes it.
+Dedup is the channel adapter's responsibility. Adapters track platform message IDs as needed. The host does not deduplicate — if the adapter forwards it, the host writes it.
 
 ## Session DB Schema
 
@@ -250,7 +226,7 @@ One-shot and recurring tasks use the same tables — no separate scheduler.
 }
 ```
 
-**`chat-sdk`** — Chat SDK serialized message, passed through from the bridge. Includes `author`, `text`, `attachments`, `isMention`, and other Chat SDK fields.
+**`chat-sdk`** — legacy inbound kind. The router and formatter still accept it and treat it like `chat`, but no channel in the tree produces it.
 
 **`task`** — scheduled task firing.
 ```json
@@ -276,7 +252,7 @@ Output `kind` determines how the host handles the row.
 { "text": "LGTM, merging now" }
 ```
 
-**`chat-sdk`** — cards and questions (`ask_user_question`, `send_card`). The Chat SDK bridge renders them; the CLI channel prints them as text.
+**`chat-sdk`** — cards and questions (`ask_user_question`, `send_card`). The channel renders them; the CLI channel prints them as text.
 ```json
 { "type": "card", "card": { "title": "Review", "children": [...] }, "fallbackText": "..." }
 ```
@@ -294,7 +270,7 @@ All interactive operations flow through messages_in/out — the DBs are the only
 
 1. Agent calls `ask_user_question` tool with title, question and options
 2. Agent-runner writes messages_out with the question card
-3. Host delivers the card through the adapter (e.g., Slack Block Kit buttons) and records a `pending_questions` row
+3. Host delivers the card through the adapter and records a `pending_questions` row
 4. User clicks an option (on the CLI: `/answer <questionId> <option>`)
 5. Adapter calls `onAction` → the interactive module writes a `question_response` system row to the session's messages_in and wakes the container
 6. Agent-runner's waiting tool call finds the response and returns the selection to the agent as the tool result
@@ -367,9 +343,9 @@ The receiving agent gets a normal chat message, attributed to the sending agent'
 - Agent-to-agent supported via target-agent routing on `messages_out`
 - Scheduling uses `process_after` + `recurrence` on the same message tables
 - Media: adapter-supplied files saved to the session inbox; URLs passed through
-- Channel adapters use a standard interface; Chat SDK adapters go through the bridge. Only the CLI channel is wired by default
+- Channel adapters use a standard interface; only the CLI channel is wired by default
 - Routing: channel adapter extracts IDs, host maps to entities
-- Concurrency: Chat SDK per-channel + one container per session
+- Concurrency: one container per session
 - Session scoping: per-session DBs, multiple sessions per agent group
 
 ## Design Decisions
@@ -484,7 +460,7 @@ NanoMika is customized by changing its code. The code is structured so that:
 5. **Registration patterns over switch statements.** Channels (`registerChannelAdapter`), MCP tools (`registerTools`), providers (`registerProvider`), host modules, delivery actions (`registerDeliveryAction`) and approval handlers (`registerApprovalHandler`) use registration patterns. Adding one means adding a file and a registration call — not editing a central switch statement.
 
 **Practical example:** Adding a new channel requires:
-- One new file (the channel adapter, native or via the Chat SDK bridge)
+- One new file (the channel adapter)
 - One line in the barrel file (`src/channels/index.ts`) to import the self-registering module
 - Zero changes to routing, formatting, delivery, or container code
 
@@ -495,8 +471,8 @@ See [writing-a-channel.md](writing-a-channel.md).
 **Config pattern:** Each channel module reads its own env vars directly from `.env`:
 
 ```typescript
-// src/channels/slack.ts
-const env = readEnvFile(['SLACK_BOT_TOKEN', 'SLACK_SIGNING_SECRET', 'SLACK_APP_TOKEN']);
+// src/channels/<name>.ts
+const env = readEnvFile(['MYCHANNEL_TOKEN']);
 ```
 
 Shared config (DATA_DIR, TIMEZONE, CREDENTIAL_PROXY_PORT, …) stays in `src/config.ts`. Channel-specific config stays in the module that uses it.
@@ -524,8 +500,8 @@ src/db/
   migrations/
     index.ts                 ← runner: checks schema_version, applies pending
     001-initial.ts           ← initial schema
-    002-chat-sdk-state.ts    ← Chat SDK state tables
     ...                      ← numbered core migrations + module-*.ts module migrations
+    016-drop-chat-sdk-state.ts ← drops the old chat_sdk_* tables
   agent-groups.ts            ← CRUD for agent_groups
   messaging-groups.ts        ← CRUD for messaging_groups + messaging_group_agents
   sessions.ts                ← CRUD for sessions + pending_questions
@@ -681,7 +657,7 @@ CREATE TABLE pending_questions (
 );
 ```
 
-Other tables: `pending_approvals` (approvals module), `agent_destinations` (agent-to-agent module), `pending_sender_approvals` and `pending_channel_approvals` (permissions module), `unregistered_senders` (dropped-message audit), `chat_sdk_*` (Chat SDK state), `schema_version`.
+Other tables: `pending_approvals` (approvals module), `agent_destinations` (agent-to-agent module), `pending_sender_approvals` and `pending_channel_approvals` (permissions module), `unregistered_senders` (dropped-message audit), `schema_version`.
 
 ### Pending Question Flow
 
@@ -689,7 +665,7 @@ When the host delivers a messages_out row whose content has `type: 'ask_question
 1. Host writes a `pending_questions` row mapping `question_id` → `session_id`
 2. Host delivers the card via the channel adapter
 
-When the user answers (a Chat SDK button click, or `/answer` on the CLI):
+When the user answers (a button click in a channel that renders buttons, or `/answer` on the CLI):
 1. The adapter calls `onAction(questionId, selectedOption, userId)`
 2. The host passes the response to the registered response handlers; the interactive module (`src/modules/interactive/`) looks up `pending_questions` by `question_id`
 3. It finds the target session, writes a `question_response` system row with `questionId` + `selectedOption` to its messages_in, and wakes the container
@@ -766,7 +742,7 @@ See [agent-runner-details.md](agent-runner-details.md) for full MCP tool paramet
 
 ### Cards
 
-**Agent-initiated (outbound):** Tool-based. Agent calls `ask_user_question` (interactive card with options) or `send_card` (structured card). Agent-runner writes the card structure to messages_out. The adapter handles platform-specific rendering (Slack Block Kit on Slack, numbered text options on the CLI, text fallback elsewhere).
+**Agent-initiated (outbound):** Tool-based. Agent calls `ask_user_question` (interactive card with options) or `send_card` (structured card). Agent-runner writes the card structure to messages_out. The adapter handles platform-specific rendering (numbered text options on the CLI, text fallback elsewhere).
 
 **Host-initiated (approval cards):** When an action requires approval, the host generates an approval card and sends it to the approver's DM. These are not agent-initiated — the agent doesn't know about the approval step.
 
@@ -813,6 +789,6 @@ Pre-scripts: if a task message has a `script` field, run it first. If `wakeAgent
 
 ## Related Documents
 
-- **[api-details.md](api-details.md)** — Channel adapter interface (NanoMika + Chat SDK bridge), message content examples, host delivery logic
+- **[api-details.md](api-details.md)** — Channel adapter interface, message content examples, host delivery logic
 - **[agent-runner-details.md](agent-runner-details.md)** — AgentProvider interface, MCP tools, message formatting, media handling, provider implementations
 - **[writing-a-channel.md](writing-a-channel.md)** — How to add a channel adapter

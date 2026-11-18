@@ -2,7 +2,7 @@
 
 Orientation for the data model: the three databases, how they fit together, and the invariants that hold across them. For table-level schemas, follow the links below.
 
-- **[db-central.md](db-central.md)** — every table in `data/v2.db` (identity, wiring, approvals, container config, Chat SDK state) plus the migration system.
+- **[db-central.md](db-central.md)** — every table in `data/v2.db` (identity, wiring, approvals, container config) plus the migration system.
 - **[db-session.md](db-session.md)** — the per-session `inbound.db` + `outbound.db` pair, seq parity, and session folder layout.
 
 Related: [architecture.md](architecture.md) for the high-level design; [api-details.md](api-details.md) for inbound/outbound message content shapes; [isolation-model.md](isolation-model.md) for channel-to-agent wiring modes.
@@ -112,7 +112,6 @@ These rules are enforced by convention in `src/session-manager.ts`, `src/db/sess
 | `agent_destinations` | central | `src/modules/agent-to-agent/db/agent-destinations.ts` (`createMessagingGroupAgent()`, `create_agent`), `ncl destinations`, migration `agent-destinations` backfill | `writeDestinations()`, delivery ACL |
 | `unregistered_senders` | central | `src/db/dropped-messages.ts` | `ncl dropped-messages` |
 | `container_configs` | central | `src/db/container-configs.ts` (`src/group-init.ts`, `src/container-runner.ts`), `ncl groups config` | `src/container-config.ts`, `src/cli/dispatch.ts`, `src/claude-md-compose.ts` |
-| `chat_sdk_*` | central | `src/state-sqlite.ts` | Chat SDK bridge |
 | `schema_version` | central | `src/db/migrations/index.ts` | migration runner |
 | `messages_in` | inbound | `src/db/session-db.ts`, `src/modules/scheduling/db.ts` | `container/agent-runner/src/db/messages-in.ts` |
 | `delivered` | inbound | `src/db/session-db.ts` (`markDelivered`) | container edit/reaction targeting |

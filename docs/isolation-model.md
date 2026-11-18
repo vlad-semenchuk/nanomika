@@ -2,7 +2,7 @@
 
 NanoMika decouples messaging channels from agent groups. When you connect a channel, you decide how it relates to your existing agents. There are three isolation levels.
 
-Only the local CLI channel (`src/channels/cli.ts`) is enabled by default; a Slack adapter is in the tree (`src/channels/slack.ts`, import commented out in `src/channels/index.ts`). Other platforms named below (GitHub, Telegram, Discord, Linear) are examples of channel adapters you could write — none of them ship.
+Only the local CLI channel (`src/channels/cli.ts`) is enabled by default. Other platforms named below (Slack, GitHub, Telegram, Discord, Linear) are examples of channel adapters you could write — none of them ship.
 
 ## The Three Levels
 

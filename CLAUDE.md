@@ -38,7 +38,7 @@ Exactly one writer per file, so there is no lock contention across the mount. He
 
 ## Central DB
 
-`data/v2.db` holds everything that isn't per-session: users, user_roles, agent_groups, messaging_groups, wiring, container_configs, pending_approvals, user_dms, chat_sdk_* (for the Chat SDK bridge), schema_version. The migrations in `src/db/migrations/` define the schema; [docs/db-central.md](docs/db-central.md) describes every table.
+`data/v2.db` holds everything that isn't per-session: users, user_roles, agent_groups, messaging_groups, wiring, container_configs, pending_approvals, user_dms, schema_version. The migrations in `src/db/migrations/` define the schema; [docs/db-central.md](docs/db-central.md) describes every table.
 
 For ad-hoc queries use `pnpm exec tsx scripts/q.ts <db> "<sql>"` rather than the `sqlite3` CLI, which may not be installed. Prefer `ncl` for changes.
 
@@ -60,7 +60,7 @@ For ad-hoc queries use `pnpm exec tsx scripts/q.ts <db> "<sql>"` rather than the
 | `src/claude-md-compose.ts` | Composes the `CLAUDE.md` an agent sees from `container/CLAUDE.md` and module fragments |
 | `src/container-config.ts`, `src/db/container-configs.ts` | Per-group container config: DB rows, materialized to `groups/<folder>/container.json` at spawn |
 | `src/container-restart.ts` | Kill + on-wake respawn for agent group containers |
-| `src/channels/` | Channel adapters (`cli.ts`, `slack.ts`), the registry, the Chat SDK bridge |
+| `src/channels/` | Channel adapters (`cli.ts`), the registry |
 | `src/cli/` | The `ncl` admin CLI: socket server, dispatcher, resources |
 | `src/db/` | DB layer and migrations |
 | `src/modules/permissions/` | Sender resolution, access gate, sender and channel approval flows, `user_dms` |
@@ -69,14 +69,14 @@ For ad-hoc queries use `pnpm exec tsx scripts/q.ts <db> "<sql>"` rather than the
 | `src/modules/scheduling/` | Scheduled tasks and recurrence |
 | `src/modules/mount-security/` | Validates extra mounts against `~/.config/nanomika/mount-allowlist.json` |
 | `container/agent-runner/src/` | Agent-runner: poll loop, formatter, provider abstraction, MCP tools, destinations |
-| `container/skills/` | Skills mounted into every agent session (`welcome`, `agent-browser`, `slack-formatting`) |
+| `container/skills/` | Skills mounted into every agent session (`welcome`, `agent-browser`) |
 | `container/CLAUDE.md` | Base instructions shared by every agent |
 | `scripts/chat.ts` | The `pnpm run chat` terminal client |
 | `groups/<folder>/` | Per-agent-group files (`CLAUDE.local.md`, skills, working files). Not committed. |
 
 ## Channels
 
-Only the local terminal channel (`src/channels/cli.ts`, socket `data/cli.sock`) is enabled. The Slack adapter is in the tree with its import commented out in `src/channels/index.ts`.
+Only the local terminal channel (`src/channels/cli.ts`, socket `data/cli.sock`) is enabled.
 
 A channel is one file under `src/channels/` that implements `ChannelAdapter` (`src/channels/adapter.ts`) and calls `registerChannelAdapter`, plus one import line in `src/channels/index.ts`. See [docs/writing-a-channel.md](docs/writing-a-channel.md).
 
@@ -139,7 +139,6 @@ The Anthropic credential lives only in `.env` and is read only by `src/credentia
 - Containers get `ANTHROPIC_BASE_URL=http://host.docker.internal:3001` and a placeholder key or token. The proxy replaces the placeholder with the real credential on the way out.
 - Supported credentials: `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, or `ANTHROPIC_AUTH_TOKEN` with `ANTHROPIC_BASE_URL`.
 - The proxy binds to `127.0.0.1` on macOS and WSL, and to the `docker0` bridge address on Linux (the host refuses to start without `CREDENTIAL_PROXY_HOST` when there is no `docker0`). It has no authentication of its own, so it must not be exposed on a public interface.
-- Channel tokens (Slack) are also read from `.env` with `readEnvFile` and used host-side only.
 
 When changing this code: do not log credential values, do not add a credential to a container's environment, and do not read secrets through `process.env`. [docs/SECURITY.md](docs/SECURITY.md) has the full model.
 

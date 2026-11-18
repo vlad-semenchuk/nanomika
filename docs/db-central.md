@@ -10,7 +10,7 @@ Access layer: `src/db/` plus the module DB helpers under `src/modules/permission
 
 ### 1.1 `agent_groups`
 
-Agent workspaces. Each maps 1:1 to a `groups/<folder>/` directory holding the composed `CLAUDE.md`, the per-group `CLAUDE.local.md` memory and the materialized `container.json`. Container config lives in `container_configs` (see §1.17 below); the `container.json` file is materialized at spawn time for the container runner to read. The first agent group (folder `main`) is created by `src/bootstrap.ts` on first start.
+Agent workspaces. Each maps 1:1 to a `groups/<folder>/` directory holding the composed `CLAUDE.md`, the per-group `CLAUDE.local.md` memory and the materialized `container.json`. Container config lives in `container_configs` (see §1.16 below); the `container.json` file is materialized at spawn time for the container runner to read. The first agent group (folder `main`) is created by `src/bootstrap.ts` on first start.
 
 ```sql
 CREATE TABLE agent_groups (
@@ -256,38 +256,7 @@ CREATE INDEX idx_unregistered_senders_last_seen ON unregistered_senders(last_see
 
 Writer: `recordDroppedMessage()` in `src/db/dropped-messages.ts`, called from `src/router.ts` and `src/modules/permissions/index.ts`. On conflict, bumps `message_count` + `last_seen`. Read with `ncl dropped-messages list`.
 
-### 1.13 Chat SDK bridge tables
-
-State backing the `SqliteStateAdapter` used by the Chat SDK bridge (`src/channels/chat-sdk-bridge.ts`; see [api-details.md](api-details.md)). NanoMika code rarely touches these directly — they're owned by `src/state-sqlite.ts`. They are only written when a Chat SDK–based channel (such as `src/channels/slack.ts`) is enabled; the default CLI channel does not use them.
-
-```sql
-CREATE TABLE chat_sdk_kv (
-  key        TEXT PRIMARY KEY,
-  value      TEXT NOT NULL,
-  expires_at INTEGER                    -- unix ts, nullable
-);
-
-CREATE TABLE chat_sdk_subscriptions (
-  thread_id     TEXT PRIMARY KEY,
-  subscribed_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE chat_sdk_locks (
-  thread_id  TEXT PRIMARY KEY,
-  token      TEXT NOT NULL,
-  expires_at INTEGER NOT NULL
-);
-
-CREATE TABLE chat_sdk_lists (
-  key        TEXT NOT NULL,
-  idx        INTEGER NOT NULL,
-  value      TEXT NOT NULL,
-  expires_at INTEGER,
-  PRIMARY KEY (key, idx)
-);
-```
-
-### 1.14 `schema_version`
+### 1.13 `schema_version`
 
 Migration ledger, written by the migration runner (§2).
 
@@ -300,7 +269,7 @@ CREATE TABLE schema_version (
 CREATE UNIQUE INDEX idx_schema_version_name ON schema_version(name);
 ```
 
-### 1.15 `pending_sender_approvals`
+### 1.14 `pending_sender_approvals`
 
 In-flight state for the unknown-sender approval flow (`unknown_sender_policy = 'request_approval'`). One row per (chat, unknown sender) while the admin card is pending; the UNIQUE constraint dedups repeat messages from the same sender. Cleared on approve / deny.
 
@@ -323,7 +292,7 @@ CREATE INDEX idx_pending_sender_approvals_mg ON pending_sender_approvals(messagi
 
 Access layer: `src/modules/permissions/db/pending-sender-approvals.ts`; flow: `src/modules/permissions/sender-approval.ts`, `src/modules/permissions/index.ts`.
 
-### 1.16 `pending_channel_approvals`
+### 1.15 `pending_channel_approvals`
 
 In-flight state for the unknown-channel registration flow: a chat that is not wired to any agent group mentions or DMs the bot, and the owner is asked whether to wire it. The primary key on `messaging_group_id` dedups repeat mentions while the card is pending. Approve creates the wiring and replays the event; deny sets `messaging_groups.denied_at`.
 
@@ -341,7 +310,7 @@ CREATE TABLE pending_channel_approvals (
 
 Access layer: `src/modules/permissions/db/pending-channel-approvals.ts`; flow: `src/modules/permissions/channel-approval.ts`, `src/modules/permissions/index.ts`.
 
-### 1.17 `container_configs`
+### 1.16 `container_configs`
 
 Per-agent-group container runtime config. Source of truth for provider, model, packages, MCP servers, mounts, CLI scope, etc. Materialized to `groups/<folder>/container.json` at spawn time by `materializeContainerJson()` in `src/container-config.ts`.
 
@@ -384,18 +353,18 @@ In array order:
 | Order | File | `name` | Introduces |
 |-------|------|--------|------------|
 | 1 | `001-initial.ts` | `initial-v2-schema` | Core tables: `agent_groups`, `messaging_groups`, `messaging_group_agents`, `users`, `user_roles`, `agent_group_members`, `user_dms`, `sessions`, `pending_questions` |
-| 2 | `002-chat-sdk-state.ts` | `chat-sdk-state` | `chat_sdk_kv`, `chat_sdk_subscriptions`, `chat_sdk_locks`, `chat_sdk_lists` |
-| 3 | `module-approvals-pending-approvals.ts` | `pending-approvals` | `pending_approvals` |
-| 4 | `module-agent-to-agent-destinations.ts` | `agent-destinations` | `agent_destinations` + backfill from existing `messaging_group_agents` wirings |
-| 5 | `module-approvals-title-options.ts` | `pending-approvals-title-options` | `ALTER TABLE pending_approvals` add `title`, `options_json` if missing (no-op on DBs that already have them) |
-| 6 | `008-dropped-messages.ts` | `dropped-messages` | `unregistered_senders` |
-| 7 | `009-drop-pending-credentials.ts` | `drop-pending-credentials` | Drops the `pending_credentials` table if present |
-| 8 | `010-engage-modes.ts` | `engage-modes` | Adds `engage_mode`, `engage_pattern`, `sender_scope`, `ignored_message_policy` to `messaging_group_agents`, backfills them, drops `trigger_rules` and `response_scope` |
-| 9 | `011-pending-sender-approvals.ts` | `pending-sender-approvals` | `pending_sender_approvals` |
-| 10 | `012-channel-registration.ts` | `channel-registration` | `messaging_groups.denied_at`, `pending_channel_approvals` |
-| 11 | `013-approval-render-metadata.ts` | `approval-render-metadata` | `title`, `options_json` on `pending_channel_approvals` and `pending_sender_approvals` |
-| 12 | `014-container-configs.ts` | `container-configs` | `container_configs` — per-agent-group container runtime config |
-| 13 | `015-cli-scope.ts` | `cli-scope` | `ALTER TABLE container_configs ADD COLUMN cli_scope` |
+| 2 | `module-approvals-pending-approvals.ts` | `pending-approvals` | `pending_approvals` |
+| 3 | `module-agent-to-agent-destinations.ts` | `agent-destinations` | `agent_destinations` + backfill from existing `messaging_group_agents` wirings |
+| 4 | `module-approvals-title-options.ts` | `pending-approvals-title-options` | `ALTER TABLE pending_approvals` add `title`, `options_json` if missing (no-op on DBs that already have them) |
+| 5 | `008-dropped-messages.ts` | `dropped-messages` | `unregistered_senders` |
+| 6 | `009-drop-pending-credentials.ts` | `drop-pending-credentials` | Drops the `pending_credentials` table if present |
+| 7 | `010-engage-modes.ts` | `engage-modes` | Adds `engage_mode`, `engage_pattern`, `sender_scope`, `ignored_message_policy` to `messaging_group_agents`, backfills them, drops `trigger_rules` and `response_scope` |
+| 8 | `011-pending-sender-approvals.ts` | `pending-sender-approvals` | `pending_sender_approvals` |
+| 9 | `012-channel-registration.ts` | `channel-registration` | `messaging_groups.denied_at`, `pending_channel_approvals` |
+| 10 | `013-approval-render-metadata.ts` | `approval-render-metadata` | `title`, `options_json` on `pending_channel_approvals` and `pending_sender_approvals` |
+| 11 | `014-container-configs.ts` | `container-configs` | `container_configs` — per-agent-group container runtime config |
+| 12 | `015-cli-scope.ts` | `cli-scope` | `ALTER TABLE container_configs ADD COLUMN cli_scope` |
+| 13 | `016-drop-chat-sdk-state.ts` | `drop-chat-sdk-state` | Drops `chat_sdk_kv`, `chat_sdk_subscriptions`, `chat_sdk_locks`, `chat_sdk_lists` if present |
 
 To add a migration, create a file in `src/db/migrations/` exporting a `Migration` with a unique `name`, and append it to the `migrations` array in `index.ts`.
 

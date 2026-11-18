@@ -157,13 +157,12 @@
 flowchart TB
   subgraph Platforms["Channels"]
     P1["Local CLI<br/>src/channels/cli.ts (default)"]
-    P2["Slack<br/>src/channels/slack.ts (opt-in)"]
     P3["Channels you write<br/>docs/writing-a-channel.md"]
   end
 
   subgraph Host["Host Process (Node)"]
     direction TB
-    Bridge["Channel Adapters<br/>src/channels/<br/>native or chat-sdk-bridge.ts"]
+    Bridge["Channel Adapters<br/>src/channels/"]
     Router["Router<br/>src/router.ts<br/>platformId + threadId → session"]
     SessMgr["Session Manager<br/>src/session-manager.ts"]
     Runner["Container Runner<br/>src/container-runner.ts<br/>docker run"]
@@ -187,7 +186,7 @@ flowchart TB
 
   Folder["Agent Group FS<br/>groups/*<br/>CLAUDE.md · CLAUDE.local.md · container.json"]
 
-  P1 & P2 & P3 --> Bridge
+  P1 & P3 --> Bridge
   Bridge --> Router
   Router --> Central
   Router --> SessMgr
@@ -201,7 +200,7 @@ flowchart TB
   OutDB --> Delivery
   Delivery --> Central
   Delivery --> Bridge
-  Bridge --> P1 & P2 & P3
+  Bridge --> P1 & P3
   Sweep --> InDB
   Sweep --> OutDB
   Sweep --> Central

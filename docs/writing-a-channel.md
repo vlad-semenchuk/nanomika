@@ -186,7 +186,7 @@ Way 1 creates that destination for you.
 
 `registerChannelAdapter(name, { factory })` runs when the module is imported. At startup the host calls each factory, then `adapter.setup(config)`.
 
-A factory may return `null`. The host then logs `Channel credentials missing, skipping` and carries on. Use this when the channel needs a token that is not set. Read tokens with `readEnvFile` from `src/env.ts`, as `src/channels/slack.ts` does, and add the variable to `.env.example`.
+A factory may return `null`. The host then logs `Channel credentials missing, skipping` and carries on. Use this when the channel needs a token that is not set. Read tokens with `readEnvFile` from `src/env.ts`, for example `readEnvFile(['MYCHANNEL_TOKEN'])` in `src/channels/<name>.ts`, and add the variable to `.env.example`.
 
 If `setup` throws, the host logs `Failed to start channel adapter` and starts without that channel. An error whose `name` is `NetworkError` is retried three times first.
 
@@ -265,12 +265,6 @@ pnpm run ncl roles grant --user http:alice --role admin --group <ag-…>
 ```
 
 Dropped messages are listed by `pnpm run ncl dropped-messages list`, with the reason.
-
-## Using a Chat SDK adapter
-
-For a platform that has a Chat SDK adapter (the `chat` package and its `@chat-adapter/*` packages) you do not write the adapter by hand. `createChatSdkBridge` in `src/channels/chat-sdk-bridge.ts` wraps the SDK adapter into a `ChannelAdapter`, including cards, buttons, threads, reactions and file uploads.
-
-`src/channels/slack.ts` is the complete example: read the tokens, create the SDK adapter, pass it to the bridge, register. Pass `webhook: false` to the bridge when the adapter receives events over its own connection, as Slack does in Socket Mode; otherwise the bridge registers it on the shared webhook server (`0.0.0.0:3000`, `WEBHOOK_PORT`). To add another platform the same way, add its adapter package with `pnpm add --save-exact <package>`, copy `slack.ts`, and add the import line.
 
 ## Checklist
 
