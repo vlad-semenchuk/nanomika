@@ -17,8 +17,8 @@
  *
  *   - **Resolution-required** (Discord, Slack, Teams, Webex, gChat):
  *     user id and DM channel id are different. The adapter must implement
- *     `openDM(handle)`, which Chat SDK's `chat.openDM` handles for us via
- *     the bridge. The returned channel id becomes the `platform_id`.
+ *     `openDM(handle)`, which calls the platform's open-DM endpoint.
+ *     The returned channel id becomes the `platform_id`.
  *
  * ## Caching
  *

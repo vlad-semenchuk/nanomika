@@ -28,10 +28,9 @@ export interface CommandInfo {
  * Only applies to chat/chat-sdk messages.
  *
  * The extracted `senderId` uses the namespaced form `<channel_type>:<raw>`,
- * the same form as user ids in the central DB. chat-sdk-bridge serializes `author.userId` as a raw
- * platform id with no prefix, so we prefix it here. If the id already
- * contains a `:` we assume it's pre-namespaced (non-chat-sdk adapters
- * that populate `senderId` directly) and leave it alone.
+ * the same form as user ids in the central DB. A raw platform id with no
+ * prefix gets the message's channel type prefixed here; an id that already
+ * contains a `:` is assumed to be namespaced and is left alone.
  */
 export function categorizeMessage(msg: MessageInRow): CommandInfo {
   const content = parseContent(msg.content);
@@ -81,11 +80,11 @@ export function isRunnerCommand(msg: MessageInRow): boolean {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function extractSenderId(msg: MessageInRow, content: any): string | null {
-  const raw: string | null = content?.senderId || content?.author?.userId || null;
+  const raw: string | null = content?.senderId || null;
   if (!raw) return null;
   // Already namespaced (e.g. "telegram:123") — use as-is.
   if (raw.includes(':')) return raw;
-  // Raw platform id from chat-sdk serialization — prefix with channel type.
+  // Raw platform id — prefix with channel type.
   if (!msg.channel_type) return raw;
   return `${msg.channel_type}:${raw}`;
 }
@@ -168,7 +167,7 @@ function formatChatMessages(messages: MessageInRow[]): string {
 
 function formatSingleChat(msg: MessageInRow): string {
   const content = parseContent(msg.content);
-  const sender = content.sender || content.author?.fullName || content.author?.userName || 'Unknown';
+  const sender = content.sender || 'Unknown';
   const time = formatLocalTime(msg.timestamp, TIMEZONE);
   const text = content.text || '';
   const idAttr = msg.seq != null ? ` id="${msg.seq}"` : '';

@@ -6,4 +6,3 @@
 // docs/writing-a-channel.md.
 
 import './cli.js';
-// import './slack.js'; // Slack (Socket Mode): uncomment and set SLACK_BOT_TOKEN + SLACK_APP_TOKEN

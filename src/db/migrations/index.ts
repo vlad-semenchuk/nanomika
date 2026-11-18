@@ -2,7 +2,6 @@ import type Database from 'better-sqlite3';
 
 import { log } from '../../log.js';
 import { migration001 } from './001-initial.js';
-import { migration002 } from './002-chat-sdk-state.js';
 import { moduleAgentToAgentDestinations } from './module-agent-to-agent-destinations.js';
 import { migration008 } from './008-dropped-messages.js';
 import { migration009 } from './009-drop-pending-credentials.js';
@@ -12,6 +11,7 @@ import { migration012 } from './012-channel-registration.js';
 import { migration013 } from './013-approval-render-metadata.js';
 import { migration014 } from './014-container-configs.js';
 import { migration015 } from './015-cli-scope.js';
+import { migration016 } from './016-drop-chat-sdk-state.js';
 import { moduleApprovalsPendingApprovals } from './module-approvals-pending-approvals.js';
 import { moduleApprovalsTitleOptions } from './module-approvals-title-options.js';
 
@@ -23,7 +23,6 @@ export interface Migration {
 
 const migrations: Migration[] = [
   migration001,
-  migration002,
   moduleApprovalsPendingApprovals,
   moduleAgentToAgentDestinations,
   moduleApprovalsTitleOptions,
@@ -35,6 +34,7 @@ const migrations: Migration[] = [
   migration013,
   migration014,
   migration015,
+  migration016,
 ];
 
 export function runMigrations(db: Database.Database): void {

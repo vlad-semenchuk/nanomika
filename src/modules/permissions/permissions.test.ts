@@ -179,7 +179,7 @@ describe('ensureUserDm', () => {
     expect(cached?.messaging_group_id).toBe(mg!.id);
   });
 
-  it('Telegram via chat-sdk-bridge: adapter.openDM returns prefixed platform_id', async () => {
+  it('Telegram-style: adapter.openDM returns prefixed platform_id', async () => {
     const mock = await mountMockAdapter('telegram', async (handle) => `telegram:${handle}`);
     seedUser('telegram:6037840640', 'telegram');
 

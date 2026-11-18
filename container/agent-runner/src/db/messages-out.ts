@@ -76,7 +76,7 @@ export function writeMessageOut(msg: WriteMessageOut): number {
  * Look up a message's platform ID by seq number.
  * Searches both inbound and outbound DBs since seq spans both.
  *
- * For inbound messages, the Chat SDK message ID is already the platform message ID
+ * For inbound messages, the inbound message ID is already the platform message ID
  * (e.g., "6037840640:42" for Telegram).
  *
  * For outbound messages, the internal ID (msg-xxx) won't work for edits/reactions.

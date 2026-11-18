@@ -2,7 +2,7 @@
  * v2 Channel Adapter interface.
  *
  * Channel adapters bridge NanoMika with messaging platforms (Discord, Slack, etc.).
- * Two patterns: native adapters (implement directly) or Chat SDK bridge (wrap a Chat SDK adapter).
+ * Each adapter implements `ChannelAdapter` directly and registers itself with the channel registry.
  */
 
 /** Passed to the adapter at setup time. */
@@ -72,8 +72,7 @@ export interface InboundMessage {
    * Platform-confirmed signal that this message is a mention of the bot.
    *
    * Set by adapters that know the platform's own mention semantics — e.g.
-   * the Chat SDK bridge sets it true from `onNewMention` / `onDirectMessage`
-   * and forwards `message.isMention` from `onSubscribedMessage`. Use this
+   * an adapter sets it true from the platform's own mention / DM events. Use this
    * in the router instead of agent-name regex matching, which breaks on
    * platforms where the mention text is the bot's platform username rather
    * than the agent_group display name (e.g. `@Andy`).
@@ -139,7 +138,7 @@ export interface ChannelAdapter {
 
   /**
    * Subscribe the bot to a thread so follow-up messages route via the
-   * platform's "subscribed message" path (onSubscribedMessage in Chat SDK).
+   * platform's "subscribed message" path.
    * Called by the router when a mention-sticky wiring first engages in a
    * thread. Idempotent: calling twice on the same thread is a no-op.
    *
@@ -159,8 +158,8 @@ export interface ChannelAdapter {
    * fall through to using the handle directly.
    *
    * For channels that distinguish user id from DM channel id (Discord,
-   * Slack, Teams, Webex, gChat): implement by delegating to Chat SDK's
-   * chat.openDM, which hits the platform's idempotent open-DM endpoint.
+   * Slack, Teams, Webex, gChat): implement by calling the platform's
+   * idempotent open-DM endpoint.
    * Returning the same platform_id on repeated calls is expected.
    */
   openDM?(userHandle: string): Promise<string>;
