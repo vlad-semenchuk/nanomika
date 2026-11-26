@@ -136,7 +136,7 @@ CREATE TABLE messages_out (
   timestamp     TEXT NOT NULL,
   deliver_after TEXT,
   recurrence    TEXT,
-  kind          TEXT NOT NULL,    -- chat|chat-sdk|system|…
+  kind          TEXT NOT NULL,    -- chat|system|…
   platform_id   TEXT,
   channel_type  TEXT,
   thread_id     TEXT,

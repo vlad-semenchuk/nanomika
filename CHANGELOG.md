@@ -6,8 +6,9 @@ All notable changes to NanoMika are documented in this file.
 
 ### Removed
 
-- The Chat SDK bridge, the Slack adapter, the shared webhook server (`WEBHOOK_PORT`), `SqliteStateAdapter` and the `slack-formatting` skill, together with the `chat` and `@chat-adapter/slack` packages. Channels implement `ChannelAdapter` directly. The `chat-sdk` message kind string stays for card and question messages.
+- The Chat SDK bridge, the Slack adapter, the shared webhook server (`WEBHOOK_PORT`), `SqliteStateAdapter` and the `slack-formatting` skill, together with the `chat` and `@chat-adapter/slack` packages. Channels implement `ChannelAdapter` directly.
 - The `chat_sdk_*` state tables. Migration `016-drop-chat-sdk-state` drops them if present.
+- The `chat-sdk` message kind. Cards and questions are now written as `chat` messages; their content `type` tells the channel how to render them.
 
 ## [3.0.0] - standalone core
 

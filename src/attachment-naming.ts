@@ -6,7 +6,7 @@
  *   1. `mimeType` → extension (Discord/Slack documents, Telegram document
  *      uploads — channels that set the MIME but not a filename).
  *   2. `att.type` → extension (Telegram photos/stickers/voice/animations —
- *      coarse media-class set by the chat-sdk bridge with no MIME).
+ *      coarse media-class set by an adapter with no MIME).
  *
  * Output is still passed through `isSafeAttachmentName` at the call site.
  * The maps emit static values, so no derivation path can construct a

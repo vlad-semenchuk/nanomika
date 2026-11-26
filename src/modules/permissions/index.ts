@@ -354,7 +354,7 @@ async function handleChannelApprovalResponse(payload: ResponsePayload): Promise<
         approverDm.channel_type,
         approverDm.platform_id,
         null,
-        'chat-sdk',
+        'chat',
         JSON.stringify({
           type: 'ask_question',
           questionId: row.messaging_group_id,
@@ -402,7 +402,7 @@ async function handleChannelApprovalResponse(payload: ResponsePayload): Promise<
         approverDm.channel_type,
         approverDm.platform_id,
         null,
-        'chat-sdk',
+        'chat',
         JSON.stringify({ text: 'Reply with the name for your new agent:' }),
       );
     } catch (err) {
@@ -613,7 +613,7 @@ setMessageInterceptor(async (event: InboundEvent): Promise<boolean> => {
           dm.channel_type,
           dm.platform_id,
           null,
-          'chat-sdk',
+          'chat',
           JSON.stringify({ text: `✅ Agent "${ag.name}" created and connected.` }),
         )
         .catch(() => {});

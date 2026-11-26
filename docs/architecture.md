@@ -152,7 +152,7 @@ JSON blobs for content — schema-free, format varies by `kind`. The schemas are
 CREATE TABLE messages_in (
   id             TEXT PRIMARY KEY,
   seq            INTEGER UNIQUE,     -- host uses even numbers
-  kind           TEXT NOT NULL,      -- 'chat' | 'chat-sdk' | 'task' | 'webhook' | 'system'
+  kind           TEXT NOT NULL,      -- 'chat' | 'task' | 'webhook' | 'system'
   timestamp      TEXT NOT NULL,
   status         TEXT DEFAULT 'pending',  -- 'pending' | 'completed' | 'failed' (+ 'paused' for tasks)
   process_after  TEXT,               -- ISO timestamp. NULL = process immediately.
@@ -183,7 +183,7 @@ CREATE TABLE messages_out (
   recurrence     TEXT,
 
   -- routing
-  kind           TEXT NOT NULL,      -- 'chat' | 'chat-sdk' | 'system'
+  kind           TEXT NOT NULL,      -- 'chat' | 'system'
   platform_id    TEXT,
   channel_type   TEXT,
   thread_id      TEXT,
@@ -226,8 +226,6 @@ One-shot and recurring tasks use the same tables — no separate scheduler.
 }
 ```
 
-**`chat-sdk`** — legacy inbound kind. The router and formatter still accept it and treat it like `chat`, but no channel in the tree produces it.
-
 **`task`** — scheduled task firing.
 ```json
 { "prompt": "Review open PRs", "script": "./review.sh" }
@@ -247,12 +245,12 @@ One-shot and recurring tasks use the same tables — no separate scheduler.
 
 Output `kind` determines how the host handles the row.
 
-**`chat`** — simple NanoMika format. Delivered through the channel adapter's `deliver()`.
+**`chat`** — simple NanoMika format. Delivered through the channel adapter's `deliver()`. Cards and questions (`ask_user_question`, `send_card`) are also `chat` rows; their content `type` (`card` / `ask_question`) tells the channel how to render them. The CLI channel prints them as text.
 ```json
 { "text": "LGTM, merging now" }
 ```
 
-**`chat-sdk`** — cards and questions (`ask_user_question`, `send_card`). The channel renders them; the CLI channel prints them as text.
+Card example:
 ```json
 { "type": "card", "card": { "title": "Review", "children": [...] }, "fallbackText": "..." }
 ```
@@ -714,7 +712,7 @@ All IO goes through the session DBs. No stdin, no stdout markers, no IPC files.
 
 Agent-runner strips routing fields (`platform_id`, `channel_type`, `thread_id`) before formatting. The agent never sees routing info — it sees content plus a `from="<destination name>"` attribute. Every prompt starts with a `<context timezone="..."/>` header.
 
-- **`chat`** / **`chat-sdk`** — one `<message id="<seq>" from="..." sender="..." time="...">` element per message, with attachments and quoted replies inline
+- **`chat`** — one `<message id="<seq>" from="..." sender="..." time="...">` element per message, with attachments and quoted replies inline
 - **`task`** — `<task>` element with the script output (if any) and the instructions
 - **`webhook`** — `<webhook source="..." event="...">` + JSON payload
 - **`system`** — skipped by the poll loop; read by the tool waiting for it (e.g. `ask_user_question`)

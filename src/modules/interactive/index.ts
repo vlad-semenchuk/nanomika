@@ -1,7 +1,7 @@
 /**
  * Interactive module — generic ask_user_question flow.
  *
- * Container-side `ask_user_question` writes a chat-sdk card to outbound.db +
+ * Container-side `ask_user_question` writes a card to outbound.db +
  * polls inbound.db for a `question_response` system message. On the host side
  * this module handles the button-click response: look up the pending_questions
  * row, write the response into the session's inbound.db, wake the container.

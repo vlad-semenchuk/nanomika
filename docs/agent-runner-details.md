@@ -213,7 +213,7 @@ Every prompt starts with a timezone header:
 
 **Formatting by kind:**
 
-- **`chat` / `chat-sdk`** — one `<message>` element per row; `id` is the row's `seq`:
+- **`chat`** — one `<message>` element per row; `id` is the row's `seq`:
   ```xml
   <message id="7" from="local" sender="John" time="2024-01-01 10:00">Check this PR
   [image: screenshot.png — saved to /workspace/inbox/msg-123/screenshot.png]</message>
@@ -324,7 +324,7 @@ Send a multiple-choice question and wait for the answer. This is a **blocking to
 
 Implementation:
 1. Generate a `questionId`
-2. Write a `messages_out` row with `kind: 'chat-sdk'` and content `{ type: 'ask_question', questionId, title, question, options }`, routed to the session's default routing
+2. Write a `messages_out` row with `kind: 'chat'` and content `{ type: 'ask_question', questionId, title, question, options }`, routed to the session's default routing
 3. Poll `inbound.db` every second for a pending row whose content contains the `questionId` (the host writes a `system` row with `{ type: 'question_response', questionId, selectedOption, userId }`)
 4. When found, mark it completed and return `selectedOption` as the tool result
 5. If the timeout expires, return an error result
@@ -333,7 +333,7 @@ On the host, delivery records the question in `pending_questions`; the channel r
 
 #### send_card
 
-Write a `messages_out` row with `kind: 'chat-sdk'` and content `{ type: 'card', card, fallbackText }`. Display-only: no response flow.
+Write a `messages_out` row with `kind: 'chat'` and content `{ type: 'card', card, fallbackText }`. Display-only: no response flow.
 
 #### schedule_task
 

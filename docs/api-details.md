@@ -41,7 +41,7 @@ interface ChannelAdapter {
 // Inbound message from adapter to host
 interface InboundMessage {
   id: string;
-  kind: 'chat' | 'chat-sdk';
+  kind: 'chat';
   content: unknown;       // JS object — host JSON.stringifies it before writing to the session DB
   timestamp: string;
   isMention?: boolean;    // platform-confirmed bot mention
@@ -81,8 +81,6 @@ Channels implement the `ChannelAdapter` interface directly. The local CLI channe
 
 Optional fields the formatter reads: `attachments` (`[{ "type", "name", "url" | "localPath" }]`) and `replyTo` (`{ "id", "sender", "text" }`).
 
-**`chat-sdk`** — the kind string is still accepted on inbound messages (the router, formatter and poll loop treat it like `chat`), but no channel in the tree produces it. In outbound rows it marks card and question messages (below).
-
 Inbound attachments carrying base64 `data` are saved by the host to the session's `inbox/<messageId>/` directory and replaced with `"localPath": "inbox/<messageId>/<filename>"`.
 
 **Question response** (`kind: 'system'`, written by the host when the user answers an `ask_user_question` card):
@@ -107,7 +105,7 @@ Inbound attachments carrying base64 `data` are saved by the host to the session'
 { "text": "Here is the report", "files": ["report.pdf"] }
 ```
 
-**Card** (`kind: 'chat-sdk'`, from `send_card`):
+**Card** (`kind: 'chat'`, from `send_card`):
 ```json
 {
   "type": "card",
@@ -120,7 +118,7 @@ Inbound attachments carrying base64 `data` are saved by the host to the session'
 }
 ```
 
-**Ask user question** (`kind: 'chat-sdk'`, from `ask_user_question`):
+**Ask user question** (`kind: 'chat'`, from `ask_user_question`):
 ```json
 {
   "type": "ask_question",
